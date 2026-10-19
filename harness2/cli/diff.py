@@ -43,7 +43,7 @@ def add_parser(subparsers):
 def run(args, ctx) -> int:
     with ctx.progress():
         adapter, root = _adopt.open_run(ctx, args.name)
-    task, after = _adopt.adopted_tree(adapter, root, args.task, args.mode)
+    task, after = _adopt.harness_for(adapter, root, args.task, args.mode)
     before = _adopt.base_tree(adapter)
     data = (
         diff_summary(adapter.substrate.surface(), before, after)

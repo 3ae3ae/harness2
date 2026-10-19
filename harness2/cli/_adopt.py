@@ -76,6 +76,14 @@ def base_tree(adapter) -> Tree:
     return read_tree(adapter.substrate.surface(), adapter.base_harness())
 
 
+def harness_for(adapter, run_dir, task: str | None, mode: str) -> tuple[str, Tree]:
+    if task is None:
+        path = run_dir / "consolidated" / C.mode_label(schedule.mode_token(mode)) / "harness"
+        if path.is_dir():
+            return "consolidated", read_tree(adapter.substrate.surface(), path)
+    return adopted_tree(adapter, run_dir, task, mode)
+
+
 def project_tree(adapter, settings) -> Tree:
     return adapter.substrate.import_tree(settings.path("paths.harness"))
 

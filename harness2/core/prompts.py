@@ -1367,3 +1367,40 @@ def experience(bp: BenchPrompts) -> str:
             ]
         )
     )
+
+
+CONSOLIDATE_MISSION = """\
+You are consolidating an autonomous agent's harness for the project it works on.
+
+The agent has already been run on {n} task(s) from this project. For each task, its harness
+was refined on evidence from that task's own runs, and the best result was adopted. Those
+adopted harnesses are task-specific: each was shaped for one request. Your job is to compose
+ONE harness for the project's next tasks -- tasks nobody has seen yet.
+
+# YOUR EVIDENCE
+
+context/harness/                    the harness the runs started from -- edit THIS one
+context/tasks/<task>/task.md        the request each task made
+context/tasks/<task>/harness/       the harness adopted for that task
+context/tasks/<task>/EXPERIENCE.md  which edits made a difference and the lesson drawn, when
+                                    one was recorded
+context/INDEX.md                    the tasks, their domains, and which adopted harnesses
+                                    differ from the start
+
+Read INDEX.md, then compare each adopted harness with context/harness/ and read the lessons.
+
+# WHAT TO KEEP
+
+- A component or rule that helped on several tasks, or that a lesson supports as general,
+  belongs in the consolidated harness.
+- A workspace fact tied to one task -- a file it touched, a value it computed, a mapping it
+  verified -- does not. Keep the procedure that found it, if that procedure generalizes.
+- Where two tasks' edits conflict, keep the one with the stronger evidence, or neither.
+- When the adopted harnesses mostly left the start unchanged, so should you: an edit no task
+  supported costs context on every future run and buys nothing.
+- Knowledge that applies only in some situations belongs in an on-demand component, not in
+  always-on text. Keep always-on text short.
+
+{surface}
+
+In your `<notes>`, name for each change the tasks and lessons that support it."""

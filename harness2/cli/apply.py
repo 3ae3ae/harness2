@@ -63,7 +63,7 @@ def add_parser(sub) -> argparse.ArgumentParser:
 
 def run(args, ctx) -> int:
     adapter, run_dir = A.open_run(ctx, args.name)
-    task, adopted = A.adopted_tree(adapter, run_dir, args.task, args.mode)
+    task, adopted = A.harness_for(adapter, run_dir, args.task, args.mode)
     base = A.base_tree(adapter)
     current = A.project_tree(adapter, ctx.settings)
     where = ctx.settings.path("paths.harness")
@@ -75,7 +75,12 @@ def run(args, ctx) -> int:
     moved = {rel for rel, _ in delta if current.get(rel) != base.get(rel)}
     todo = [(rel, kind) for rel, kind in delta if args.force or rel not in moved]
 
-    print(f"Harness adopted for {task} ({args.mode}, run {run_dir.name}) -> {where}\n")
+    label = (
+        "consolidated from the run's tasks"
+        if args.task is None and task == "consolidated"
+        else f"adopted for {task}"
+    )
+    print(f"Harness {label} ({args.mode}, run {run_dir.name}) -> {where}\n")
     for rel, kind in delta:
         mark = "!" if rel in moved else kind
         print(f"  {mark} {rel:<48} {_delta(rel, current, adopted)}")
