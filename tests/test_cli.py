@@ -30,7 +30,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from harness2 import settings
-from harness2.cli import _adopt, completion, judge, main, run, runs
+from harness2.cli import _adopt, _final, completion, judge, main, run, runs
 from harness2.cli import _common as C
 from harness2.core import events
 from harness2.core.judge import Scored
@@ -81,7 +81,10 @@ class CliTests(unittest.TestCase):
         return C.Context(parsed, getattr(parsed._module, "FLAGS", {}))
 
     def execute(self, k=1, *extra):
-        with patch.object(run, "Proposer", DemoProposer):
+        with (
+            patch.object(run, "Proposer", DemoProposer),
+            patch.object(_final, "Proposer", DemoProposer),
+        ):
             return self.invoke("--json", "run", "--k", str(k), *extra)
 
     def test_all_command_arguments(self):
@@ -251,7 +254,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         data = json.loads(stdout)
         self.assertEqual(data["stream"], [["accounting", "ledger-2"]])
-        self.assertEqual((data["estimate"]["rollouts"], data["estimate"]["sessions"]), (7, 8))
+        self.assertEqual((data["estimate"]["rollouts"], data["estimate"]["sessions"]), (7, 10))
         self.assertEqual(data["estimate"]["per_task_per_mode"]["reflector"], 1)
         self.assertEqual(list((self.project / ".harness2/runs").rglob("run.json")), [])
         self.assertEqual(list((self.project / ".harness2/runs").rglob("events.jsonl")), [])
@@ -259,7 +262,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("would refine 1 task(s)", stdout)
         self.assertIn("accounting", stdout)
-        self.assertIn("Model calls: 8 agent runs + 8", stdout)
+        self.assertIn("Model calls: 8 agent runs + 9", stdout)
         self.assertEqual(
             run._estimate(1, 2, ("agg",), {"spent_usd": 4, "calls": 2})["average_cost_per_call"], 2
         )
@@ -278,7 +281,7 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 data = json.loads(stdout)
                 self.assertEqual(
-                    data["totals"]["calls"], 2 * (k + 6 * k + 6 * k + 2 * (1 + int(k > 1)))
+                    data["totals"]["calls"], 2 * (k + 6 * k + 6 * k + 2 * (1 + int(k > 1))) + 2
                 )
                 name = f"claude-k{k}"
                 root = self.project / ".harness2/runs" / name
@@ -309,7 +312,7 @@ class CliTests(unittest.TestCase):
                 code, stdout, _ = self.invoke("--json", "diff", name)
                 self.assertEqual(code, 0)
                 diff = json.loads(stdout)
-                self.assertEqual(diff["task"], "ledger-2")
+                self.assertEqual(diff["task"], "consolidated")
                 self.assertIn("-total = sum", diff["diff"])
                 self.assertIn("+total = sum", diff["diff"])
                 code, stdout, _ = self.invoke(
@@ -321,7 +324,10 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(self.invoke("--json", "judge", name, "--bases")[0], 0)
                 code, stdout, _ = self.invoke("--json", "runs", "show", name)
                 self.assertEqual((code, json.loads(stdout)["done"]), (0, 2))
-                with patch.object(run, "Proposer", DemoProposer):
+                with (
+                    patch.object(run, "Proposer", DemoProposer),
+                    patch.object(_final, "Proposer", DemoProposer),
+                ):
                     code, stdout, _ = self.invoke(
                         "--json", "run", "--k", str(k), "--mode", "parallel,sequential"
                     )
@@ -348,17 +354,23 @@ class CliTests(unittest.TestCase):
         for exception, expected, status in (
             (KeyboardInterrupt(), 130, "interrupted"),
             (events.Stopped("interrupted"), 130, "interrupted"),
+            (events.Stopped("usage_limit"), 4, "stopped"),
             (RuntimeError("fixture crash"), 1, "error"),
         ):
             with (
                 patch.object(run.schedule, "run_sweep", side_effect=exception),
                 patch.object(run, "Proposer", DemoProposer),
+                patch.object(run, "consolidate") as final,
             ):
                 code, out, error = self.invoke("run")
+            final.assert_not_called()
             self.assertEqual(code, expected)
             self.assertEqual(
                 json.loads((root / "events.jsonl").read_text().splitlines()[-1])["status"], status
             )
+            if isinstance(exception, events.Stopped) and str(exception) == "usage_limit":
+                self.assertIn("reached the model provider's usage limit", out)
+                self.assertIn("Run the same command once the limit resets to resume.", out)
             if expected == 130:
                 self.assertIn("Run the same command to resume", out)
         for result, expected in (
@@ -368,6 +380,7 @@ class CliTests(unittest.TestCase):
             with (
                 patch.object(run.schedule, "run_sweep", return_value=result),
                 patch.object(run, "Proposer", DemoProposer),
+                patch.object(_final, "Proposer", DemoProposer),
             ):
                 self.assertEqual(self.invoke("run")[0], expected)
 

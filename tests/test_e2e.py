@@ -230,7 +230,7 @@ class EndToEndTests(unittest.TestCase):
                     Counter(call["role"] for call in all_calls),
                     {
                         "executor": 24,
-                        "improver": 18,
+                        "improver": 20,
                         "selector": 2,
                         "reflector": 4,
                     },
@@ -277,8 +277,8 @@ class EndToEndTests(unittest.TestCase):
                         for row in run_rows
                     },
                     {
-                        "claude-k1": (2, 2, 1.08),
-                        "k2": (2, 2, 2.16),
+                        "claude-k1": (2, 2, 1.09),
+                        "k2": (2, 2, 2.17),
                     },
                 )
                 invoke("judge")
@@ -336,7 +336,7 @@ class EndToEndTests(unittest.TestCase):
                     ["git", "worktree", "list", "--porcelain"], cwd=project, text=True
                 )
                 self.assertEqual(worktrees.count("worktree "), 1)
-                print("E2E: 2 task types; k=1/k=2; 48 calls; 2 graded; adopted; resume=0 calls")
+                print("E2E: 2 task types; k=1/k=2; 50 calls; 2 graded; adopted; resume=0 calls")
 
 
 if __name__ == "__main__":
