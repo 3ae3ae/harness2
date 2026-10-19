@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import providers
-from ..substrate.codex import parse_items_text
+from ..substrate.codex import CodexSubstrate, parse_items_text
 from . import events
 from .spec import ChannelSpec
 
@@ -165,8 +165,11 @@ class Proposer:
                         tmp, mission, system, wall
                     )
                 spent_usd += cost
+                if err and providers.USAGE_LIMIT.search(err):
+                    events.request_stop("usage_limit")
+                    raise events.Stopped("usage_limit")
                 if not text.strip():
-                    last = err or "empty reply"
+                    last = err[-300:] or "empty reply"
                     continue
                 r = Reply(
                     label=label,
@@ -193,6 +196,9 @@ class Proposer:
                 last = f"{type(exc).__name__}: {exc}"
             finally:
                 shutil.rmtree(tmp, ignore_errors=True)
+            if providers.USAGE_LIMIT.search(last):
+                events.request_stop("usage_limit")
+                raise events.Stopped("usage_limit")
 
         r = Reply(
             label=label,
@@ -214,8 +220,12 @@ class Proposer:
         )
 
     def _claude(self, cwd: Path, mission: str, system: str, wall: int) -> tuple[str, float, str]:
-        home = cwd / ".claude-home"
-        home.mkdir()
+        login = self.spec.provider is not None and self.spec.provider.type == "claude-login"
+        env = self.env()
+        if not login:
+            home = cwd / ".claude-home"
+            home.mkdir()
+            env["CLAUDE_CONFIG_DIR"] = str(home)
         cmd = [
             *self._bin(),
             "--dangerously-skip-permissions",
@@ -228,6 +238,7 @@ class Proposer:
             self._model(),
             "--setting-sources",
             "project,local",
+            *(["--strict-mcp-config", "--no-session-persistence"] if login else []),
         ]
         stdin = mission
         if system:
@@ -243,7 +254,7 @@ class Proposer:
             cmd,
             input=stdin,
             cwd=cwd,
-            env=self.env() | {"CLAUDE_CONFIG_DIR": str(home)},
+            env=env,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -252,24 +263,28 @@ class Proposer:
         payload = _parse_json(p.stdout)
         text = str(payload.get("result") or payload.get("text") or "")
         err = ""
-        if payload.get("is_error") or payload.get("subtype") not in (None, "success"):
-            err = f"CLI error: {payload.get('subtype')} {str(text)[:200]}"
+        if (
+            p.returncode
+            or payload.get("is_error")
+            or payload.get("subtype") not in (None, "success")
+        ):
+            err = f"rc={p.returncode}: {p.stdout} {p.stderr}"
             text = ""
-        elif p.returncode != 0 and not text.strip():
-            err = f"rc={p.returncode}: {(p.stderr or '')[-300:]}"
         return text, float(payload.get("total_cost_usd") or 0.0), err
 
     def _codex(self, cwd: Path, mission: str, system: str, wall: int) -> tuple[str, float, str]:
-        home = cwd / ".codex-home"
-        home.mkdir()
         model = self._model()
-        config = (
-            providers.codex_config(self.spec.provider, model, self.spec.effort)
-            if self.spec.provider is not None
-            else f"model = {json.dumps(model)}\n"
-            f"model_reasoning_effort = {json.dumps(self.spec.effort)}\n"
-        )
-        (home / "config.toml").write_text(config, encoding="utf-8")
+        home = None
+        if self.spec.provider is None or self.spec.provider.type != "chatgpt-login":
+            home = cwd / ".codex-home"
+            home.mkdir()
+            config = (
+                providers.codex_config(self.spec.provider, model, self.spec.effort)
+                if self.spec.provider is not None
+                else f"model = {json.dumps(model)}\n"
+                f"model_reasoning_effort = {json.dumps(self.spec.effort)}\n"
+            )
+            (home / "config.toml").write_text(config, encoding="utf-8")
         p = subprocess.run(
             [
                 *self._bin(),
@@ -278,13 +293,14 @@ class Proposer:
                 "--skip-git-repo-check",
                 "--dangerously-bypass-approvals-and-sandbox",
                 "--ephemeral",
+                *providers.codex_args(self.spec.provider, model, self.spec.effort),
                 "-C",
                 str(cwd),
                 "-",
             ],
             input=f"# SYSTEM INSTRUCTIONS\n\n{system}\n\n# END\n\n{mission}" if system else mission,
             cwd=cwd,
-            env=self.env() | {"CODEX_HOME": str(home)},
+            env=CodexSubstrate().env(self.env(), home, provider=self.spec.provider),
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -299,7 +315,7 @@ class Proposer:
             if item.get("type") == "agent_message":
                 text = str(item.get("text") or "")
         if errors or p.returncode:
-            return "", 0.0, "; ".join(errors)[-300:] or f"rc={p.returncode}: {p.stderr[-300:]}"
+            return "", 0.0, f"rc={p.returncode}: {p.stdout} {p.stderr}"
         return text, 0.0, ""
 
     def _opencode(self, cwd: Path, mission: str, system: str, wall: int) -> tuple[str, float, str]:
@@ -348,10 +364,12 @@ class Proposer:
             timeout=wall,
         )
         cost = _opencode_cost(p.stdout)
+        text, err = _opencode_stdout(p.stdout)
+        if (p.returncode or err) and providers.USAGE_LIMIT.search(p.stdout + p.stderr):
+            return "", cost, p.stdout + p.stderr
         ans = out / "answer.md"
         if ans.is_file() and ans.read_text(errors="replace").strip():
             return ans.read_text(errors="replace"), cost, ""
-        text, err = _opencode_stdout(p.stdout)
         if text.strip():
             return text, cost, ""
         tail = _strip_oc_banner(p.stderr or "").strip()[-300:]

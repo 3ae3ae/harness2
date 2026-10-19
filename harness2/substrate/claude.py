@@ -197,7 +197,15 @@ class ClaudeSubstrate:
     def install_into(self, install: Install, workspace: Path) -> None:
         self.export_tree(self.import_tree(install.staging_dir), workspace, base={})
 
-    def argv(self, prompt_file: Path, workspace: Path, model: str, effort: str) -> list[str]:
+    def argv(
+        self,
+        prompt_file: Path,
+        workspace: Path,
+        model: str,
+        effort: str,
+        *,
+        provider: providers.Provider | None = None,
+    ) -> list[str]:
         return [
             *cli_argv(self.bin, "claude"),
             "-p",
@@ -211,16 +219,23 @@ class ClaudeSubstrate:
             model,
             "--effort",
             effort,
+            *(
+                ["--strict-mcp-config", "--no-session-persistence"]
+                if provider is not None and provider.type == "claude-login"
+                else []
+            ),
         ]
 
     def env(
         self, base_env: Mapping[str, str], provider: providers.Provider, config_dir: Path
     ) -> dict[str, str]:
-        config_dir.mkdir(parents=True, exist_ok=True)
+        login = provider.type == "claude-login"
+        if not login:
+            config_dir.mkdir(parents=True, exist_ok=True)
         return {
             **{k: v for k, v in base_env.items() if k not in providers.STRIP_ENV},
             **providers.claude_env(provider),
-            "CLAUDE_CONFIG_DIR": str(config_dir),
+            **({} if login else {"CLAUDE_CONFIG_DIR": str(config_dir)}),
         }
 
     def read_trajectory(

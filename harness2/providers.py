@@ -18,12 +18,17 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import subprocess
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from .settings import ConfigError
 
-PROVIDER_TYPES = ("anthropic", "openai", "vertex", "bedrock")
+PROVIDER_TYPES = ("anthropic", "openai", "vertex", "bedrock", "claude-login", "chatgpt-login")
+USAGE_LIMIT = re.compile(
+    r"(?i)usage limit|rate[ _-]?limit|too many requests|\b429\b|quota|credit balance is too low"
+)
 STRIP_ENV = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -60,6 +65,10 @@ def split_model(ref: str) -> tuple[str, str]:
 
 
 def claude_env(p: Provider) -> dict[str, str]:
+    if p.type == "claude-login":
+        return {}
+    if p.type == "chatgpt-login":
+        raise ConfigError("Claude Code cannot use a ChatGPT login.")
     if p.type == "anthropic":
         env = {}
         if p.api_key_env:
@@ -104,7 +113,24 @@ def codex_config(p: Provider, model: str, effort: str) -> str:
     )
 
 
+def codex_args(p: Provider | None, model: str, effort: str) -> list[str]:
+    if p is not None and p.type == "chatgpt-login":
+        return [
+            "--ignore-user-config",
+            "--ignore-rules",
+            "-m",
+            model,
+            "-c",
+            f"model_reasoning_effort={json.dumps(effort)}",
+        ]
+    if p is not None:
+        codex_config(p, model, effort)
+    return []
+
+
 def opencode_config(p: Provider, model: str) -> tuple[dict, dict[str, str]]:
+    if p.type in ("claude-login", "chatgpt-login"):
+        raise ConfigError("OpenCode needs an API provider; subscription logins are not supported.")
     if p.type == "vertex":
         region = p.region or "global"
         return {}, {
@@ -135,6 +161,10 @@ def opencode_config(p: Provider, model: str) -> tuple[dict, dict[str, str]]:
 
 
 def litellm_params(p: Provider, model: str) -> dict:
+    if p.type in ("claude-login", "chatgpt-login"):
+        raise ConfigError(
+            "The bridge needs an API provider; subscription logins are not supported."
+        )
     if p.type in ("anthropic", "openai"):
         params = {"model": f"{p.type}/{model}", "api_key": f"os.environ/{p.api_key_env}"}
         if p.base_url or p.type == "openai":
@@ -152,6 +182,32 @@ def litellm_params(p: Provider, model: str) -> dict:
 
 
 def check(p: Provider) -> list[str]:
+    if p.type in ("claude-login", "chatgpt-login"):
+        argv = (
+            ["claude", "auth", "status"]
+            if p.type == "claude-login"
+            else ["codex", "login", "status"]
+        )
+        login = "claude auth login" if p.type == "claude-login" else "codex login"
+        try:
+            result = subprocess.run(
+                argv,
+                env={
+                    k: v
+                    for k, v in os.environ.items()
+                    if k not in STRIP_ENV
+                    and (p.type != "chatgpt-login" or k not in ("OPENAI_API_KEY", "CODEX_API_KEY"))
+                },
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                return []
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return [f"{p.type}: not logged in; run `{login}`"]
     problems = []
     if p.api_key_env and not os.environ.get(p.api_key_env):
         problems.append(f"{p.name}: set {p.api_key_env}")

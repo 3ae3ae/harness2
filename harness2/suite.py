@@ -32,14 +32,14 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import providers, workspace
-from .core import runmark, tree
+from .core import events, runmark, tree
 from .core.library import slug
 from .core.proposer import Proposer, ProposerError, _parse_json
 from .core.spec import BenchPrompts, BenchSpec, ChannelSpec
 from .registry import SuiteContext
 from .settings import ConfigError, Settings
 from .substrate._native import checked_path, cli_argv
-from .substrate.claude import ClaudeSubstrate
+from .substrate.claude import ClaudeSubstrate, parse_events
 from .substrate.codex import CodexSubstrate
 from .substrate.command import CommandSubstrate
 
@@ -450,10 +450,14 @@ class GenericAdapter:
                 if self.executor["name"] == "claude":
                     env = self.substrate.env(env, provider, run_dir / "claude-home")
                 else:
-                    home = run_dir / "codex-home"
-                    self.substrate.write_home(home, provider, model, self.executor["effort"])
-                    env = self.substrate.env(env, home)
-                argv = self.substrate.argv(prompt_file, ws, model, self.executor["effort"])
+                    home = None
+                    if provider.type != "chatgpt-login":
+                        home = run_dir / "codex-home"
+                        self.substrate.write_home(home, provider, model, self.executor["effort"])
+                    env = self.substrate.env(env, home, provider=provider)
+                argv = self.substrate.argv(
+                    prompt_file, ws, model, self.executor["effort"], provider=provider
+                )
             try:
                 if self.executor["name"] == "command":
                     exit_code = self.substrate.run(prompt_file, ws, run_dir, wall, env)
@@ -477,6 +481,25 @@ class GenericAdapter:
             except OSError as exc:
                 (run_dir / "stderr.log").write_text(str(exc), encoding="utf-8")
                 exit_code = -1
+            stream = run_dir / "stream.jsonl"
+            failed = exit_code != 0 or any(
+                event.get("type") in ("error", "turn.failed")
+                or (
+                    event.get("type") == "result"
+                    and (event.get("is_error") or event.get("subtype") not in (None, "success"))
+                )
+                for event in parse_events(stream)
+            )
+            if failed:
+                tail = "".join(
+                    path.read_text(encoding="utf-8", errors="replace")[-16000:]
+                    for path in (stream, run_dir / "stderr.log")
+                    if path.is_file()
+                )
+                if providers.USAGE_LIMIT.search(tail):
+                    shutil.rmtree(run_dir)
+                    events.request_stop("usage_limit")
+                    raise events.Stopped("usage_limit")
             if config["workspace"] == "project":
                 (run_dir / "deliverable.patch").write_text(
                     workspace.diff_since(ws, base, (*self.substrate.NATIVE_PATHS, ".harness2")),
@@ -484,7 +507,6 @@ class GenericAdapter:
                 )
             if (ws / "output").is_dir():
                 shutil.copytree(ws / "output", run_dir / "output")
-            stream = run_dir / "stream.jsonl"
             (run_dir / "final.md").write_text(
                 self.substrate.final_message(stream), encoding="utf-8"
             )
