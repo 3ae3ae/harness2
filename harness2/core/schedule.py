@@ -24,6 +24,7 @@ import json
 import os
 import random
 import re
+import time
 import traceback
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -32,8 +33,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from . import events, recursion, runmark, selection
 from . import library as library_store
-from . import recursion, runmark, selection
 from . import tree as harness_tree
 from .proposer import Proposer
 from .spec import BenchmarkAdapter, RunView
@@ -188,9 +189,7 @@ def _selector_for(
     if prop.spec == spec:
         return prop
     audit = Path(prop.audit_dir) / "selector" if prop.audit_dir else None
-    return Proposer(
-        spec, audit_dir=audit, attempts=prop.attempts, project=prop.project, region=prop.region
-    )
+    return Proposer(spec, audit_dir=audit, attempts=prop.attempts)
 
 
 def _tree_is_base(surface, base_tree: harness_tree.Tree, tree: harness_tree.Tree) -> bool:
@@ -391,7 +390,7 @@ def _resume(
         sel = cached_sels[mode]
         namespace = Namespace(adapter.spec.name, adapter.substrate.name, mode, k, seed, tag)
         harness_dir = namespace.task_dir(runs_root, task_id) / "harnesses" / sel["chosen_label"]
-        run_dir = Path(sel.get("chosen_run_dir") or "")
+        run_dir = runmark.resolve_path(sel.get("chosen_run_dir") or "", adapter.spec.runs_root)
         try:
             if not sel.get("chosen_run_dir") or not run_dir.is_dir():
                 raise ValueError("adopted run directory is missing")
@@ -434,8 +433,19 @@ def _roll_bases(
     if not pending:
         return {}
     rolled: dict[str, RunView] = {}
+    work_dir = dead_dir.parent
+    for label, rid in pending:
+        cached = recursion._cached_rollout(adapter, work_dir, label, rid, None)
+        if cached is not None:
+            rolled[label] = cached
+    pending = [(label, rid) for label, rid in pending if label not in rolled]
+    if not pending:
+        return rolled
     execute_many = getattr(adapter, "execute_many", None)
     if len(pending) > 1 and callable(execute_many):
+        for _ in pending:
+            events.check()
+        started = time.monotonic()
         try:
             dirs = list(execute_many(task_id, None, [rid for _lbl, rid in pending]))
             for i, (label, rid) in enumerate(pending):
@@ -454,27 +464,29 @@ def _roll_bases(
                     delivered=exists and adapter.delivered(rd),
                     error="" if exists else "adapter returned a missing run directory",
                 )
+        except events.Stopped:
+            raise
         except Exception as exc:
             for label, rid in pending:
                 rolled[label] = _dead(label, rid, dead_dir, f"{type(exc).__name__}: {exc}")
+        for label, _rid in pending:
+            recursion._finish_rollout(adapter, work_dir, task_id, rolled[label], None, started)
         return rolled
 
     def _one(label_rid: tuple[str, str]) -> RunView:
         label, rid = label_rid
-        try:
-            rd = adapter.execute(task_id, None, rid)
-            return RunView(
-                label=label, run_id=rid, run_dir=rd, ok=True, delivered=adapter.delivered(rd)
-            )
-        except Exception as exc:
-            return _dead(label, rid, dead_dir, f"{type(exc).__name__}: {exc}")
+        return recursion._roll(
+            adapter, None, task_id, label, None, lambda _label: rid, work_dir, record=False
+        )
 
     if len(pending) == 1:
         rv = _one(pending[0])
-        return {rv.label: rv}
-    width = min(len(pending), ROLLOUT_PARALLEL)
-    with ThreadPoolExecutor(max_workers=max(1, width)) as pool_r:
-        return {rv.label: rv for rv in pool_r.map(_one, pending)}
+        rolled[rv.label] = rv
+    else:
+        width = min(len(pending), ROLLOUT_PARALLEL)
+        with ThreadPoolExecutor(max_workers=max(1, width)) as pool_r:
+            rolled.update({rv.label: rv for rv in pool_r.map(_one, pending)})
+    return rolled
 
 
 def _run_one_mode(
@@ -493,6 +505,7 @@ def _run_one_mode(
     surface,
     pool_policy: str,
     res: TaskResult,
+    reflector_prop: Proposer | None = None,
 ) -> None:
     """Run one recursion mode over the shared bases, select a final, and record it on `res`."""
     work_dir = n.task_dir(runs_root, task_id)
@@ -510,6 +523,7 @@ def _run_one_mode(
         library_dir=lib_dir,
     )
     res.modes[mode] = r.to_dict()
+    events.check()
     candidates = selection.selection_pool(mode, k, r.rollouts, base)
     if pool_policy == "finals" and k == 1:
         sel = selection.trivial_selection(
@@ -526,19 +540,23 @@ def _run_one_mode(
             work_dir=work_dir,
             pool_kind="finals",
         )
+    events.emit("selection", task=task_id, mode=mode, chosen=sel.chosen_label)
     if mode_lib and sel.ok:
+        events.check()
         selection.reflect_adoption(
             task_id,
             sel,
             r.rollouts,
             adapter=adapter,
-            prop=selector,
+            prop=reflector_prop if reflector_prop is not None else selector,
             work_dir=work_dir,
             decisions={stage.label: stage.notes or stage.error for stage in r.stages},
         )
     d = sel.to_dict()
-    d["chosen_run_dir"] = str(
-        candidates[sel.chosen_label].run_dir if sel.chosen_label in candidates else ""
+    d["chosen_run_dir"] = (
+        runmark.relative_path(candidates[sel.chosen_label].run_dir, adapter.spec.runs_root)
+        if sel.chosen_label in candidates
+        else ""
     )
 
     chosen_tree = r.trees.get(sel.chosen_label, base_tree)
@@ -576,6 +594,7 @@ def run_task(
     library: library_store.Library | None = None,
     libraries: dict[str, library_store.Library] | None = None,
     selector_prop: Proposer | None = None,
+    reflector_prop: Proposer | None = None,
     pool_policy: str = "finals",
 ) -> TaskResult:
     """k shared reference executions -> every mode -> blind selection per mode -> summary.json.
@@ -613,6 +632,8 @@ def run_task(
     ):
         return res
 
+    events.check()
+    events.emit("task_start", task=task_id, domain=domain, status="running")
     surface = adapter.substrate.surface()
     base_tree = harness_tree.read_tree(surface, adapter.base_harness())
 
@@ -625,11 +646,19 @@ def run_task(
     rolled = _roll_bases(task_id, adapter, pending, dead_dir)
     base: list[RunView] = [rolled[label] for label in labels]
 
-    res.base = [{"label": b.label, "run_id": b.run_id, "run_dir": str(b.run_dir)} for b in base]
+    res.base = [
+        {
+            "label": b.label,
+            "run_id": b.run_id,
+            "run_dir": runmark.relative_path(b.run_dir, adapter.spec.runs_root),
+        }
+        for b in base
+    ]
     if not any(b.ok for b in base):
         res.status = "base-failed"
         res.errors.append("no base rollout produced anything")
         _write_summary(summary_path, res)
+        events.emit("task_done", task=task_id, domain=domain, status=res.status)
         return res
 
     for mode in modes:
@@ -643,6 +672,7 @@ def run_task(
                 adapter=adapter,
                 prop=prop,
                 selector=selector,
+                reflector_prop=reflector_prop,
                 n=n,
                 runs_root=runs_root,
                 mode_lib=mode_libs.get(mode),
@@ -651,6 +681,8 @@ def run_task(
                 pool_policy=pool_policy,
                 res=res,
             )
+        except events.Stopped:
+            raise
         except Exception as exc:
             res.modes[mode] = {
                 "ok": False,
@@ -663,6 +695,7 @@ def run_task(
 
     res.status = _merged_status(res.to_dict())
     _write_summary(summary_path, res)
+    events.emit("task_done", task=task_id, domain=domain, status=res.status)
     return res
 
 
@@ -679,6 +712,7 @@ def run_domain(
     seed: int | None = None,
     tag: str = "",
     selector_prop: Proposer | None = None,
+    reflector_prop: Proposer | None = None,
     pool_policy: str = "finals",
 ) -> dict:
     """Every task in one domain, in `stream_order()` order, threading the library forward."""
@@ -711,6 +745,7 @@ def run_domain(
                 tag=tag,
                 libraries=libs,
                 selector_prop=selector_prop,
+                reflector_prop=reflector_prop,
                 pool_policy=pool_policy,
             )
             if r.status in ("ok", "skipped"):
@@ -724,6 +759,8 @@ def run_domain(
                     "error": "; ".join(r.errors) if r.errors else r.status,
                     "library_entries_before": before,
                 }
+        except events.Stopped:
+            raise
         except Exception as exc:
             out["failed"] += 1
             row = {"task": tid, "status": "exception", "error": f"{type(exc).__name__}: {exc}"}
@@ -791,6 +828,7 @@ def run_sweep(
     domain_parallel: int = 1,
     only_domains: Sequence[str] = (),
     selector_prop: Proposer | None = None,
+    reflector_prop: Proposer | None = None,
     pool_policy: str = "finals",
     max_tasks: int | None = None,
     only_tasks: Sequence[str] = (),
@@ -824,15 +862,25 @@ def run_sweep(
                 seed=seed,
                 tag=tag,
                 selector_prop=selector,
+                reflector_prop=reflector_prop,
                 pool_policy=pool_policy,
             ): d
             for d in order
         }
-        for f in as_completed(futs):
-            try:
-                rows.append(f.result())
-            except Exception as exc:
-                rows.append({"domain": futs[f], "error": f"{type(exc).__name__}: {exc}"})
+        stopped = None
+        try:
+            for f in as_completed(futs):
+                try:
+                    rows.append(f.result())
+                except events.Stopped as exc:
+                    stopped = exc
+                except Exception as exc:
+                    rows.append({"domain": futs[f], "error": f"{type(exc).__name__}: {exc}"})
+        except KeyboardInterrupt:
+            events.request_stop("interrupted")
+            raise
+    if stopped is not None:
+        raise stopped
     return {
         "benchmark": adapter.spec.name,
         "substrate": adapter.substrate.name,

@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import os
 import sys
-from dataclasses import fields
 from pathlib import Path
 
 from harness2.core.spec import ChannelSpec
@@ -172,13 +171,11 @@ def resolve_channel_model(
 ) -> ChannelSpec:
     """The one channel->model mapping; a lone override of either raises."""
     kwargs = {"effort": effort, "steps": steps, "timeout": timeout}
-    channel_fields = {field.name for field in fields(ChannelSpec)}
-    # shortcut: W2 adds bin/provider, remove the field guards when it is integrated.
-    if "bin" in channel_fields and (kind or DEFAULT_PROPOSER_CHANNEL) == "opencode":
+    if (kind or DEFAULT_PROPOSER_CHANNEL) == "opencode":
         kwargs["bin"] = (
             f"{BUN} run --cwd {OPENCODE_DIR}/packages/opencode --conditions=browser src/index.ts"
         )
-    if "provider" in channel_fields and VERTEX_PROJECT:
+    if VERTEX_PROJECT:
         kwargs["provider"] = Provider(
             "vertex", "vertex", project=VERTEX_PROJECT, region=VERTEX_REGION
         )

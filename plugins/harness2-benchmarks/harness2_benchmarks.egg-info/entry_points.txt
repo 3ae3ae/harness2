@@ -1,0 +1,6 @@
+[harness2.suites]
+jb = harness2_benchmarks.suites.jb
+lab = harness2_benchmarks.suites.lab
+wb-code = harness2_benchmarks.suites.wb_code
+wb-office = harness2_benchmarks.suites.wb_office
+wb-web = harness2_benchmarks.suites.wb_web

@@ -25,6 +25,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -33,23 +34,16 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .. import config
+from .. import providers
+from ..substrate.codex import parse_items_text
+from . import events
 from .spec import ChannelSpec
 
 SYSTEM_ARG_MAX = 120_000
 
 
-MAX_CONCURRENCY = int(config.PROPOSER_CONCURRENCY)
-_SEM = threading.BoundedSemaphore(MAX_CONCURRENCY) if MAX_CONCURRENCY > 0 else None
-
-
-_DROP_ENV = (
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "ANTHROPIC_BASE_URL",
-    "ANTHROPIC_BEDROCK_BASE_URL",
-    "CLAUDE_CODE_USE_BEDROCK",
-)
+MAX_CONCURRENCY = 2
+_SEM = threading.BoundedSemaphore(MAX_CONCURRENCY)
 
 
 def _obj(d: dict, key: str) -> dict:
@@ -94,34 +88,38 @@ class Proposer:
     spec: ChannelSpec
     audit_dir: Path | None = None
     attempts: int = 2
-    project: str = field(default_factory=lambda: config.VERTEX_PROJECT)
-    region: str = field(default_factory=lambda: config.VERTEX_REGION)
     _calls: list[Reply] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        if not self.spec.model.strip():
-            raise ValueError("Set HARNESS2_IMPROVER_MODEL before starting model sessions")
+        if self.spec.kind != "human" and not self.spec.model.strip():
+            raise ValueError("model must not be empty for model sessions")
 
     def env(self) -> dict[str, str]:
-        e = {k: v for k, v in os.environ.items() if k not in _DROP_ENV}
-        if self.spec.kind == "claude_cli":
-            e.update(
-                {
-                    "CLAUDE_CODE_USE_VERTEX": "1",
-                    "ANTHROPIC_VERTEX_PROJECT_ID": self.project,
-                    "CLOUD_ML_REGION": self.region,
-                    "ANTHROPIC_MODEL": self.spec.model,
-                }
-            )
-        else:
-            e.update(
-                {
-                    "GOOGLE_VERTEX_PROJECT": self.project,
-                    "GOOGLE_VERTEX_LOCATION": self.region,
-                    "VERTEXAI_LOCATION": self.region,
-                }
-            )
+        e = {k: v for k, v in os.environ.items() if k not in providers.STRIP_ENV}
+        if self.spec.provider is not None:
+            if self.spec.kind == "claude":
+                e.update(providers.claude_env(self.spec.provider))
+            elif self.spec.kind == "opencode":
+                e.update(providers.opencode_config(self.spec.provider, self._model())[1])
         return e
+
+    def _model(self) -> str:
+        return self.spec.model.split("/", 1)[-1]
+
+    def _bin(self) -> list[str]:
+        return shlex.split(self.spec.bin) if self.spec.bin else [self.spec.kind]
+
+    def _emit(self, reply: Reply) -> None:
+        events.emit(
+            "session",
+            label=reply.label,
+            channel=self.spec.kind,
+            model=self.spec.model,
+            ok=reply.ok,
+            cached=reply.cached,
+            cost_usd=reply.cost_usd,
+            wall_s=reply.wall_s,
+        )
 
     def call(
         self,
@@ -140,10 +138,13 @@ class Proposer:
         directory is destroyed -- e.g. "context/harness", which is how an edited tree comes back.
         """
 
-        cache_key = _call_fingerprint(label, mission, system, context_dir)
+        if self.spec.kind == "human":
+            raise ProposerError("the human channel needs an interactive selector")
+        cache_key = _call_fingerprint(label, mission, system, context_dir, self.audit_dir)
         cached = self._cached(label, cache_key, require_workspace=bool(harvest))
         if cached is not None:
             self._calls.append(cached)
+            self._emit(cached)
             return cached
 
         wall = int(timeout or self.spec.timeout)
@@ -154,14 +155,15 @@ class Proposer:
         for attempt in range(1, tries + 1):
             if attempt > 1:
                 time.sleep(10 * (attempt - 1))
-            tmp = Path(tempfile.mkdtemp(prefix="harness2-prop-"))
+            tmp = Path(tempfile.mkdtemp(prefix="harness2-prop-")).resolve()
             try:
                 if context_dir and Path(context_dir).is_dir():
                     shutil.copytree(context_dir, tmp / "context", dirs_exist_ok=True)
                 with _SEM if _SEM is not None else contextlib.nullcontext():
-                    text, cost, err = (
-                        self._claude_cli if self.spec.kind == "claude_cli" else self._opencode
-                    )(tmp, mission, system, wall)
+                    events.check()
+                    text, cost, err = getattr(self, f"_{self.spec.kind}")(
+                        tmp, mission, system, wall
+                    )
                 spent_usd += cost
                 if not text.strip():
                     last = err or "empty reply"
@@ -181,7 +183,10 @@ class Proposer:
                         _drop_workspace(self._paths(label, cache_key))
                 self._write_audit(r, mission, system, cache_key)
                 self._calls.append(r)
+                self._emit(r)
                 return r
+            except events.Stopped:
+                raise
             except subprocess.TimeoutExpired:
                 last = f"timeout after {wall}s"
             except Exception as exc:
@@ -201,24 +206,28 @@ class Proposer:
         )
         self._calls.append(r)
         self._write_audit(r, mission, system, cache_key)
+        self._emit(r)
         raise ProposerError(
             f"[{label}] {self.spec.kind}/{self.spec.model}: {last}",
             attempts=tries,
             cost_usd=spent_usd,
         )
 
-    def _claude_cli(
-        self, cwd: Path, mission: str, system: str, wall: int
-    ) -> tuple[str, float, str]:
-        cli = shutil.which("claude") or "claude"
+    def _claude(self, cwd: Path, mission: str, system: str, wall: int) -> tuple[str, float, str]:
+        home = cwd / ".claude-home"
+        home.mkdir()
         cmd = [
-            cli,
+            *self._bin(),
             "--dangerously-skip-permissions",
             "-p",
             "--output-format",
             "json",
             "--effort",
             self.spec.effort,
+            "--model",
+            self._model(),
+            "--setting-sources",
+            "project,local",
         ]
         stdin = mission
         if system:
@@ -234,7 +243,7 @@ class Proposer:
             cmd,
             input=stdin,
             cwd=cwd,
-            env=self.env(),
+            env=self.env() | {"CLAUDE_CONFIG_DIR": str(home)},
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -250,6 +259,49 @@ class Proposer:
             err = f"rc={p.returncode}: {(p.stderr or '')[-300:]}"
         return text, float(payload.get("total_cost_usd") or 0.0), err
 
+    def _codex(self, cwd: Path, mission: str, system: str, wall: int) -> tuple[str, float, str]:
+        home = cwd / ".codex-home"
+        home.mkdir()
+        model = self._model()
+        config = (
+            providers.codex_config(self.spec.provider, model, self.spec.effort)
+            if self.spec.provider is not None
+            else f"model = {json.dumps(model)}\n"
+            f"model_reasoning_effort = {json.dumps(self.spec.effort)}\n"
+        )
+        (home / "config.toml").write_text(config, encoding="utf-8")
+        p = subprocess.run(
+            [
+                *self._bin(),
+                "exec",
+                "--json",
+                "--skip-git-repo-check",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--ephemeral",
+                "-C",
+                str(cwd),
+                "-",
+            ],
+            input=f"# SYSTEM INSTRUCTIONS\n\n{system}\n\n# END\n\n{mission}" if system else mission,
+            cwd=cwd,
+            env=self.env() | {"CODEX_HOME": str(home)},
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=wall,
+        )
+        text, errors = "", []
+        for event in parse_items_text(p.stdout):
+            if event.get("type") in ("turn.failed", "error"):
+                error = event.get("error") or event.get("message") or event["type"]
+                errors.append(str(error))
+            item = _obj(event, "item")
+            if item.get("type") == "agent_message":
+                text = str(item.get("text") or "")
+        if errors or p.returncode:
+            return "", 0.0, "; ".join(errors)[-300:] or f"rc={p.returncode}: {p.stderr[-300:]}"
+        return text, 0.0, ""
+
     def _opencode(self, cwd: Path, mission: str, system: str, wall: int) -> tuple[str, float, str]:
         (cwd / "MISSION.md").write_text(
             (f"{system}\n\n---\n\n" if system else "") + mission, encoding="utf-8"
@@ -257,14 +309,14 @@ class Proposer:
         out = cwd / "output"
         out.mkdir(exist_ok=True)
 
-        (cwd / "opencode.json").write_text(
-            json.dumps({"agent": {"build": {"steps": self.spec.steps}}}), encoding="utf-8"
-        )
+        config = {"agent": {"build": {"steps": self.spec.steps}}}
+        if self.spec.provider is not None:
+            config.update(providers.opencode_config(self.spec.provider, self._model())[0])
+        (cwd / "opencode.json").write_text(json.dumps(config), encoding="utf-8")
         prompt = (
             "Read MISSION.md first. Do what it asks. Reply with the requested output as "
             "your final message AND save it verbatim to output/answer.md."
         )
-        oc = _opencode_dir()
 
         env = self.env()
         env["OPENCODE_PERMISSION"] = json.dumps(
@@ -274,12 +326,7 @@ class Proposer:
         env["XDG_STATE_HOME"] = str(cwd / ".ocstate")
 
         cmd = [
-            str(config.BUN),
-            "run",
-            "--cwd",
-            str(oc / "packages" / "opencode"),
-            "--conditions=browser",
-            "src/index.ts",
+            *self._bin(),
             "run",
             prompt,
             "--dir",
@@ -393,17 +440,6 @@ def _drop_workspace(paths: dict[str, Path] | None) -> None:
         shutil.rmtree(paths["workspace"], ignore_errors=True)
 
 
-def _opencode_dir() -> Path:
-    """The upstream OpenCode checkout to run through bun: config.OPENCODE_DIR."""
-    oc = config.OPENCODE_DIR
-    if not (oc / "packages" / "opencode" / "src" / "index.ts").is_file():
-        raise FileNotFoundError(
-            f"no OpenCode checkout at {oc} (config.OPENCODE_DIR); run "
-            f"scripts/setup_benchmark.py <benchmark> to clone the pinned commit there"
-        )
-    return oc
-
-
 def _parse_json(stdout: str) -> dict:
     """The claude CLI's one JSON object, tolerating banners and trailing noise around it.
 
@@ -504,7 +540,13 @@ def _opencode_cost(stdout: str) -> float:
     return round(total, 6)
 
 
-def _call_fingerprint(label: str, mission: str, system: str, context_dir: Path | str | None) -> str:
+def _call_fingerprint(
+    label: str,
+    mission: str,
+    system: str,
+    context_dir: Path | str | None,
+    anchor: Path | None = None,
+) -> str:
     """Content-address one call, including its evidence and its mode/task workspace path.
 
     The resolved path is part of the key: the two modes can have byte-identical k=1 evidence
@@ -516,7 +558,12 @@ def _call_fingerprint(label: str, mission: str, system: str, context_dir: Path |
         h.update(b"\0")
     if context_dir:
         root = Path(context_dir)
-        h.update(str(root.resolve()).encode("utf-8", errors="replace"))
+        location = (
+            os.path.relpath(root.resolve(), Path(anchor).resolve())
+            if anchor
+            else str(root.resolve())
+        )
+        h.update(location.encode("utf-8", errors="replace"))
         h.update(b"\0")
         if root.is_dir():
             for p in sorted(root.rglob("*")):

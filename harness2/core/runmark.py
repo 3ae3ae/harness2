@@ -33,6 +33,21 @@ MARK = ".adapt_complete"
 VERSION = 1
 
 
+def relative_path(path: Path | str, root: Path) -> str:
+    """Persist paths inside the run root without tying them to its current location."""
+    resolved = Path(path).resolve()
+    return str(
+        resolved.relative_to(root.resolve())
+        if resolved.is_relative_to(root.resolve())
+        else resolved
+    )
+
+
+def resolve_path(path: Path | str, root: Path) -> Path:
+    """Read both relocatable records and legacy absolute paths."""
+    return root / Path(path)
+
+
 def _ignored(p: Path) -> bool:
     """Byproducts that are not part of the harness and must not change its identity."""
     return "__pycache__" in p.parts or p.suffix == ".pyc" or p.name == ".DS_Store"

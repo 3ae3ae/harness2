@@ -21,21 +21,21 @@ executions. Invalid proposals receive one retry before inheriting the current ha
 from __future__ import annotations
 
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
 
-from .. import config
-from . import context, prompts
+from . import context, events, prompts, runmark
 from . import tree as harness_tree
 from .ledger import Ledger
 from .proposer import Proposer, ProposerError
 from .spec import BenchmarkAdapter, RunView, resolve_prompts
 
 STAGE_ATTEMPTS = 2
-TRANSPORT_ATTEMPTS = config.TRANSPORT_ATTEMPTS
-PHASE_WIDTH = config.PHASE_WIDTH
+TRANSPORT_ATTEMPTS = 2
+PHASE_WIDTH = 2
 
 
 @dataclass
@@ -149,6 +149,7 @@ def _run_stage(
     decisions: dict[str, str] | None = None,
 ) -> Stage:
     """Build evidence, propose an edit, and retry an invalid proposal once."""
+    events.check()
     surface = adapter.substrate.surface()
 
     try:
@@ -163,6 +164,8 @@ def _run_stage(
             decisions=decisions,
         )
         mission = context.mission(tree, job=job)
+    except events.Stopped:
+        raise
     except Exception as exc:
         return Stage(
             label=label,
@@ -257,9 +260,53 @@ def _record_sessions(ledger: Ledger, stages: Sequence[Stage]) -> None:
         ledger.session(stage.label, stage.usd, cached=stage.cached, attempts=stage.attempts)
 
 
+def _cached_rollout(adapter, work_dir, label, run_id, harness_dir) -> RunView | None:
+    """Reuse completed rollouts without executing or charging for them again."""
+    cache = work_dir / "rollouts" / label
+    if not runmark.is_complete(cache, harness_dir=harness_dir):
+        return None
+    record = runmark.read_mark(cache)
+    if record.get("run_id") != run_id:
+        return None
+    data = dict(record["rollout"])
+    data["run_dir"] = runmark.resolve_path(data["run_dir"], adapter.spec.runs_root)
+    if not data["run_dir"].is_dir():
+        return None
+    if data["delivered"] and not adapter.delivered(data["run_dir"]):
+        return None
+    intact = getattr(adapter, "artifacts_intact", None)
+    if callable(intact) and not intact(data["run_dir"]):
+        return None
+    return RunView(**data)
+
+
+def _finish_rollout(adapter, work_dir, task_id, rv, harness_dir, started) -> None:
+    rv.wall_s = round(time.monotonic() - started, 3)
+    cost = getattr(adapter, "rollout_cost", None)
+    rv.cost_usd = float(cost(rv.run_dir)) if callable(cost) and rv.run_dir.is_dir() else 0.0
+    if rv.ok:
+        data = vars(rv) | {"run_dir": runmark.relative_path(rv.run_dir, adapter.spec.runs_root)}
+        runmark.mark_complete(
+            work_dir / "rollouts" / rv.label,
+            run_id=rv.run_id,
+            harness_dir=harness_dir,
+            extra={"rollout": data},
+        )
+    events.emit(
+        "rollout",
+        task=task_id,
+        label=rv.label,
+        run_id=rv.run_id,
+        ok=rv.ok,
+        delivered=rv.delivered,
+        cost_usd=rv.cost_usd,
+        wall_s=rv.wall_s,
+    )
+
+
 def _roll(
     adapter: BenchmarkAdapter,
-    ledger: Ledger,
+    ledger: Ledger | None,
     task_id: str,
     label: str,
     tree: harness_tree.Tree | None,
@@ -275,9 +322,16 @@ def _roll(
             adapter.substrate.surface(), tree, work_dir / "harnesses" / label
         )
     run_id = run_id_of(label)
+    cached = _cached_rollout(adapter, work_dir, label, run_id, hdir)
+    if cached is not None:
+        if record and ledger is not None:
+            ledger.rollout(label, cached=True)
+        return cached
+    events.check()
+    started = time.monotonic()
     try:
-        rd = adapter.execute(task_id, hdir, run_id)
-        exists = Path(rd).exists()
+        rd = Path(adapter.execute(task_id, hdir, run_id))
+        exists = rd.exists()
         rv = RunView(
             label=label,
             run_id=run_id,
@@ -286,6 +340,8 @@ def _roll(
             delivered=exists and adapter.delivered(rd),
             error="" if exists else "adapter returned a missing run directory",
         )
+    except events.Stopped:
+        raise
     except Exception as exc:
         rv = RunView(
             label=label,
@@ -295,8 +351,9 @@ def _roll(
             delivered=False,
             error=f"{type(exc).__name__}: {exc}",
         )
-    if record:
-        ledger.rollout(label)
+    _finish_rollout(adapter, work_dir, task_id, rv, hdir, started)
+    if record and ledger is not None:
+        ledger.rollout(label, rv.cost_usd)
     return rv
 
 
@@ -335,7 +392,7 @@ def _roll_many(
             )
         )
     for (label, _tree), rv in zip(items, got):
-        ledger.rollout(label)
+        ledger.rollout(label, rv.cost_usd)
         out[label] = rv
     return out
 
@@ -351,14 +408,16 @@ def run_parallel(
     run_id_of: Callable[[str], str],
     base_tree: harness_tree.Tree,
     library_dir: Path | None = None,
-    propose_workers: int = PHASE_WIDTH,
-    rollout_workers: int = PHASE_WIDTH,
+    propose_workers: int | None = None,
+    rollout_workers: int | None = None,
 ) -> ModeResult:
     """WIDTH: 2k iid candidates from shared evidence, then k INDEPENDENT compositions."""
+    propose_workers = PHASE_WIDTH if propose_workers is None else propose_workers
+    rollout_workers = PHASE_WIDTH if rollout_workers is None else rollout_workers
     surface = adapter.substrate.surface()
     ledger = Ledger(mode="agg", task_id=task_id, k=k)
     for r in base:
-        ledger.rollout(r.label)
+        ledger.rollout(r.label, r.cost_usd)
     result = ModeResult(mode="agg", task_id=task_id, k=k, ledger=ledger)
     result.rollouts.update({r.label: r for r in base})
     ctx_dir = work_dir / "context"
@@ -460,14 +519,16 @@ def run_sequential(
     run_id_of: Callable[[str], str],
     base_tree: harness_tree.Tree,
     library_dir: Path | None = None,
-    propose_workers: int = 2,
-    rollout_workers: int = PHASE_WIDTH,
+    propose_workers: int | None = None,
+    rollout_workers: int | None = None,
 ) -> ModeResult:
     """DEPTH: k nested passes over the same shared base evidence."""
+    propose_workers = PHASE_WIDTH if propose_workers is None else propose_workers
+    rollout_workers = PHASE_WIDTH if rollout_workers is None else rollout_workers
     surface = adapter.substrate.surface()
     ledger = Ledger(mode="seq", task_id=task_id, k=k)
     for r in base:
-        ledger.rollout(r.label)
+        ledger.rollout(r.label, r.cost_usd)
     result = ModeResult(mode="seq", task_id=task_id, k=k, ledger=ledger)
     result.rollouts.update({r.label: r for r in base})
     ctx_dir = work_dir / "context"
