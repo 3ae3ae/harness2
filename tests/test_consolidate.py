@@ -28,7 +28,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from harness2.cli import _adopt, _common, consolidate, eval
+from harness2.cli import _adopt, _common, _final, eval, run
 from harness2.cli.main import COMMANDS, build_parser, main
 from harness2.core import events
 from harness2.settings import ConfigError
@@ -172,29 +172,23 @@ class ConsolidateTests(unittest.TestCase):
         with (directory / "task.toml").open("a") as stream:
             stream.write(f'split = "{split}"\n')
 
-    def execute(self, *argv):
-        self.invoke("run", "--name", "trial", *argv)
+    def execute(self, *argv, code=0):
+        return self.invoke("run", "--name", "trial", *argv, code=code)
 
     def adapter(self):
         args = build_parser().parse_args(["-C", str(self.project), "diff", "trial"])
         return _adopt.open_run(_common.Context(args, {}), "trial")[0]
 
     def test_two_tasks_retry_adoption_eval_and_json(self):
-        self.execute()
+        text, _ = self.execute()
         before = _common.event_totals(self.run_dir)
-        fallback = json.loads(self.invoke("--json", "diff", "trial")[0])
-        self.assertEqual(fallback["task"], "b-two")
-        text, _ = self.invoke("consolidate", "trial")
         self.assertEqual(self.calls.read_text(), "2")
         path = self.run_dir / "consolidated/parallel/harness"
         self.assertEqual((path / "CLAUDE.md").read_text(), "Use shared procedure.\n")
+        self.assertIn(f"Final harness (parallel): {path}", text)
         self.assertIn(
-            f"Consolidated the harnesses adopted for 2 task(s) (parallel) into {path}", text
-        )
-        self.assertIn("  M CLAUDE.md", text)
-        self.assertIn(
-            "Next: harness2 eval trial compares it with the starting harness; "
-            "harness2 apply trial writes it into the project.",
+            "Next: harness2 diff trial shows it; harness2 apply trial writes it into the project; "
+            "harness2 eval trial measures it first.",
             text,
         )
         meta = json.loads((path.parent / "consolidation.json").read_text())
@@ -205,12 +199,13 @@ class ConsolidateTests(unittest.TestCase):
             (path.parent / "notes.md").read_text(),
             "a-one and b-two support the shared procedure.\n",
         )
-        data = json.loads(self.invoke("--json", "consolidate", "trial")[0])
-        self.assertEqual(set(data), {"path", "tasks", "changes", "notes"})
-        self.assertEqual(data["path"], str(path))
-        self.assertEqual(data["changes"], [["CLAUDE.md", "M"]])
-        self.assertEqual(data["tasks"], ["a-one", "b-two"])
-        self.assertEqual(data["notes"], "a-one and b-two support the shared procedure.")
+        data = json.loads(self.invoke("--json", "run", "--name", "trial")[0])
+        self.assertEqual(set(data), {"result", "totals", "final"})
+        self.assertEqual(data["final"], {"parallel": str(path)})
+        self.assertEqual(data["totals"]["calls"], before["calls"])
+        self.assertEqual(data["totals"]["spent_usd"], before["spent_usd"])
+        self.assertEqual(self.calls.read_text(), "2")
+        self.assertTrue(list((self.run_dir / "consolidated/_audit").glob("*.response.md")))
         consolidated = json.loads(self.invoke("--json", "diff", "trial")[0])
         self.assertEqual(consolidated["task"], "consolidated")
         self.assertIn("+Use shared procedure.", consolidated["diff"])
@@ -246,7 +241,7 @@ class ConsolidateTests(unittest.TestCase):
         self.assertEqual(len(eval_rows), 8)
         self.assertEqual({row["cost_usd"] for row in eval_rows}, {0.125})
         self.assertAlmostEqual(
-            _common.event_totals(self.run_dir)["spent_usd"], before["spent_usd"] + 1.03
+            _common.event_totals(self.run_dir)["spent_usd"], before["spent_usd"] + 1.0
         )
         self.assertEqual(
             {row["run_id"] for row in eval_rows},
@@ -261,7 +256,6 @@ class ConsolidateTests(unittest.TestCase):
     def test_eval_filters_skipped_failed_grades_and_limits(self):
         self.new_task("c-no-judge", judge=False)
         self.execute()
-        self.invoke("consolidate", "trial")
         text, _ = self.invoke("eval", "trial")
         self.assertIn("Skipped 1 task(s) with no check or rubric: c-no-judge", text)
         data = json.loads(
@@ -300,35 +294,76 @@ class ConsolidateTests(unittest.TestCase):
         self.assertEqual(data["mean"], {"start": None, "consolidated": None})
         self.assertEqual(data["skipped"], ["c-no-judge"])
 
-    def test_modes_unchanged_and_validation_failure_preserves_result(self):
-        self.execute("--mode", "parallel,sequential")
-        self.invoke("consolidate", "trial", "--mode", "sequential")
+    def test_modes_and_unchanged_harness(self):
+        text, _ = self.execute("--mode", "parallel,sequential")
+        self.assertEqual(self.calls.read_text(), "3")
         adapter = self.adapter()
-        self.assertEqual(_adopt.harness_for(adapter, self.run_dir, None, "seq")[0], "consolidated")
+        for mode in ("parallel", "sequential"):
+            path = self.run_dir / "consolidated" / mode / "harness"
+            self.assertIn(f"Final harness ({mode}): {path}", text)
+            self.assertEqual(
+                _adopt.harness_for(adapter, self.run_dir, None, mode)[0], "consolidated"
+            )
         self.assertEqual(
             _adopt.harness_for(adapter, self.run_dir, "a-one", "sequential")[0], "a-one"
         )
-        self.assertEqual(_adopt.harness_for(adapter, self.run_dir, None, "parallel")[0], "b-two")
-        path = self.run_dir / "consolidated/sequential/harness/CLAUDE.md"
-        with patch.dict(os.environ, {"WC_BEHAVIOR": "invalid"}):
-            _, err = self.invoke("consolidate", "trial", "--mode", "sequential", code=1)
-        self.assertIn("broken.py", err)
-        self.assertEqual(path.read_text(), "Use shared procedure.\n")
-        with patch.dict(os.environ, {"WC_BEHAVIOR": "missing"}):
-            _, err = self.invoke("consolidate", "trial", code=1)
-        self.assertIn("the harness directory did not come back", err)
         with patch.dict(os.environ, {"WC_BEHAVIOR": "unchanged"}):
-            text, _ = self.invoke("consolidate", "trial")
+            self.invoke("run", "--name", "unchanged")
+        self.assertEqual(self.invoke("diff", "unchanged")[0], "\n")
+
+    def test_validation_failure_keeps_exit_code_and_can_retry(self):
+        with patch.dict(os.environ, {"WC_BEHAVIOR": "invalid"}):
+            text, err = self.execute()
+        self.assertIn("Could not build the final harness (parallel): ", err)
+        self.assertIn("broken.py", err)
+        self.assertTrue(err.rstrip().endswith(". Run the same command again to retry."))
+        self.assertNotIn("Final harness (parallel):", text)
+        self.assertFalse((self.run_dir / "consolidated/parallel/harness").exists())
+        self.assertEqual(self.calls.read_text(), "2")
+        _, err = self.invoke("eval", "trial", code=1)
+        self.assertIn("this run has no final harness yet; run `harness2 run` to finish it", err)
+        with patch.dict(os.environ, {"WC_BEHAVIOR": "valid"}):
+            self.execute()
+        self.assertEqual(self.calls.read_text(), "3")
+        path = self.run_dir / "consolidated/parallel/harness/CLAUDE.md"
+        self.assertEqual(path.read_text(), "Use shared procedure.\n")
+        for failure, expected in (
+            ("failure", 0),
+            ("failure", 3),
+            ("failure", 1),
+            (events.Stopped("usage_limit"), 0),
+        ):
+            error = failure if isinstance(failure, Exception) else ConfigError(failure)
+            result = {
+                "domains": [
+                    {"failed": int(expected == 3), **({"error": "dead"} if expected == 1 else {})}
+                ]
+            }
+            with (
+                patch.object(run.schedule, "run_sweep", return_value=result),
+                patch.object(run, "consolidate", side_effect=error),
+            ):
+                text, err = self.execute(code=expected)
+            self.assertEqual(
+                err,
+                f"Could not build the final harness (parallel): {error}. "
+                "Run the same command again to retry.\n",
+            )
+            self.assertEqual(path.read_text(), "Use shared procedure.\n")
+
+    def test_missing_workspace_failure_keeps_exit_code(self):
+        with patch.dict(os.environ, {"WC_BEHAVIOR": "missing"}):
+            _, err = self.execute()
         self.assertIn(
-            "The consolidated harness is the same as the starting one: no task's edits generalized.",
-            text,
+            "Could not build the final harness (parallel): "
+            "the harness directory did not come back from the session. "
+            "Run the same command again to retry.",
+            err,
         )
-        self.assertEqual(self.invoke("diff", "trial")[0], "\n")
+        self.assertEqual(self.calls.read_text(), "2")
 
     def test_context_stream_order_optional_lessons_and_errors(self):
         self.execute()
-        _, err = self.invoke("eval", "trial", code=1)
-        self.assertIn("run `harness2 consolidate` first", err)
         adapter = self.adapter()
         record = _common.load_run(self.run_dir)
         plan = record["schedule"]
@@ -347,7 +382,7 @@ class ConsolidateTests(unittest.TestCase):
         )
         row["selections"]["agg"]["chosen_tree_is_base"] = True
         task_path.write_text(json.dumps(row))
-        tasks = consolidate._context(adapter, self.run_dir, record, "parallel", dest, base)
+        tasks = _final._context(adapter, self.run_dir, record, "parallel", dest, base)
         self.assertEqual(tasks, ["b-two", "a-one"])
         self.assertEqual(
             (dest / "INDEX.md").read_text(),
@@ -360,9 +395,14 @@ class ConsolidateTests(unittest.TestCase):
             row["selections"]["agg"]["ok"] = False
             path.write_text(json.dumps(row))
         with self.assertRaisesRegex(ConfigError, "no successful selection"):
-            consolidate._context(
-                adapter, self.run_dir, record, "parallel", self.root / "empty", base
-            )
+            _final._context(adapter, self.run_dir, record, "parallel", self.root / "empty", base)
+        with (
+            patch.object(run.schedule, "run_sweep", return_value={"domains": [{"failed": 2}]}),
+            patch.object(run, "consolidate") as final,
+        ):
+            data = json.loads(self.invoke("--json", "run", "--name", "trial", code=3)[0])
+        final.assert_not_called()
+        self.assertEqual(data["final"], {})
 
     def test_rollout_grades_and_optional_cost(self):
         adapter = SimpleNamespace(execute=Mock(return_value=self.root), score=Mock())
@@ -393,15 +433,15 @@ class ConsolidateTests(unittest.TestCase):
 
     def test_command_order_and_help(self):
         i = COMMANDS.index("diff")
-        self.assertEqual(COMMANDS[i + 1 : i + 3], ("consolidate", "eval"))
+        self.assertEqual(COMMANDS[i + 1], "eval")
+        self.assertNotIn("consolidate", COMMANDS)
         parser = build_parser()
-        for name in ("consolidate", "eval"):
-            sub = parser._subparsers._group_actions[0].choices[name]
-            for action in sub._actions:
-                self.assertTrue(action.help)
-                if action.dest != "help":
-                    self.assertEqual(action.help, action.help.lower())
-                    self.assertFalse(action.help.endswith("."))
+        sub = parser._subparsers._group_actions[0].choices["eval"]
+        for action in sub._actions:
+            self.assertTrue(action.help)
+            if action.dest != "help":
+                self.assertEqual(action.help, action.help.lower())
+                self.assertFalse(action.help.endswith("."))
 
 
 if __name__ == "__main__":

@@ -114,7 +114,7 @@ def run(args, ctx) -> int:
         adapter, root = A.open_run(ctx, args.name)
     harness = root / "consolidated" / args.mode / "harness"
     if not harness.is_dir():
-        raise ConfigError("run `harness2 consolidate` first")
+        raise ConfigError("this run has no final harness yet; run `harness2 run` to finish it")
     record = C.load_run(root)
     allowed = set(adapter.tasks(args.split))
     wanted = set(_csv(args.only_tasks))

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from .. import core, registry
@@ -24,6 +25,7 @@ from ..core import events, ledger, schedule
 from ..core.proposer import Proposer
 from ..settings import ConfigError
 from . import _common as C
+from ._final import consolidate
 
 FLAGS = {
     "suite": "suite.name",
@@ -97,7 +99,7 @@ def _estimate(tasks: int, k: int, modes: tuple[str, ...], totals: dict) -> dict:
     rollouts = tasks * (k + (ledger.expected_rollouts(k) - k) * len(modes))
     sessions = (
         tasks * len(modes) * sum(per_mode[key] for key in ("improver", "selector", "reflector"))
-    )
+    ) + len(modes)
     return {
         "per_task_per_mode": per_mode,
         "rollouts": rollouts,
@@ -116,12 +118,15 @@ def _stopped(name: str, reason: str, totals: dict) -> str:
         "interrupted": "interrupted",
         "budget_usd": f"reached --budget-usd {totals['budget_usd']:g}",
         "max_calls": f"reached --max-calls {totals['max_calls']}",
+        "usage_limit": "reached the model provider's usage limit",
     }.get(reason, reason)
     advice = (
         "Run the same command to resume."
         if reason == "interrupted"
         else "Raise the limit and run the same command to resume."
     )
+    if reason == "usage_limit":
+        advice = "Run the same command once the limit resets to resume."
     return f"Run {name} stopped: {why}{_spend(totals)}.\n{advice}"
 
 
@@ -274,13 +279,33 @@ def run(args, ctx) -> int:
             else (("failed", "failed tasks") if failed else ("ok", ""))
         )
         done = sum(int(row.get("done", 0)) for row in result["domains"])
+        final = {}
+        for mode in modes:
+            label = C.mode_label(mode)
+            try:
+                if not any(
+                    path.parent.parent.name == audit.name
+                    and (selection := (row.get("selections") or {}).get(mode) or {}).get("ok")
+                    and selection.get("chosen_label")
+                    for path, row in C.summaries(root)
+                ):
+                    continue
+                final[label] = consolidate(ctx, adapter, root, label)["path"]
+            except Exception as exc:
+                print(
+                    f"Could not build the final harness ({label}): {exc}. "
+                    "Run the same command again to retry.",
+                    file=sys.stderr,
+                )
         ctx.out(
-            {"result": result, "totals": events.totals()},
+            {"result": result, "totals": events.totals(), "final": final},
             lambda data: (
                 f"Run {name}: {done} task(s) done, {failed} failed"
                 + _spend(data["totals"])
                 + (f"\nErrors: {reason}" if errors else "")
-                + f"\nNext: harness2 status {name} · harness2 judge {name} · harness2 diff {name}"
+                + "".join(f"\nFinal harness ({mode}): {path}" for mode, path in final.items())
+                + f"\nNext: harness2 diff {name} shows it; harness2 apply {name} writes it into "
+                f"the project; harness2 eval {name} measures it first."
             ),
         )
         return 1 if errors else 3 if failed else 0
