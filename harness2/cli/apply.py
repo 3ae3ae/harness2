@@ -25,6 +25,8 @@ the result.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import json
 import sys
 
 from . import _adopt as A
@@ -62,6 +64,19 @@ def add_parser(sub) -> argparse.ArgumentParser:
 
 
 def run(args, ctx) -> int:
+    if not ctx.args.json:
+        return _apply(args, ctx)[0]
+    if not (args.yes or args.dry_run):
+        message = "--json cannot ask for confirmation; add --yes or --dry-run"
+        print(json.dumps({"error": message, "exit_code": 1}))
+        return 1
+    with contextlib.redirect_stdout(sys.stderr):  # the review text; stdout carries the JSON
+        code, summary = _apply(args, ctx)
+    print(json.dumps(summary))
+    return code
+
+
+def _apply(args, ctx) -> tuple[int, dict]:
     adapter, run_dir = A.open_run(ctx, args.name)
     task, adopted = A.harness_for(adapter, run_dir, args.task, args.mode)
     base = A.base_tree(adapter)
@@ -71,7 +86,7 @@ def run(args, ctx) -> int:
     delta = A.changes(base, adopted)
     if not delta:
         ctx.log(f"The harness adopted for {task} is the one the run started from; nothing to do.")
-        return 0
+        return 0, {"run": run_dir.name, "harness": task, "changes": []}
     moved = {rel for rel, _ in delta if current.get(rel) != base.get(rel)}
     todo = [(rel, kind) for rel, kind in delta if args.force or rel not in moved]
 
@@ -90,35 +105,55 @@ def run(args, ctx) -> int:
             + ("will be overwritten (--force)." if args.force else "skipped; --force overwrites.")
         )
     print()
+
+    def summary(applied=(), done=None) -> dict:
+        return {
+            "run": run_dir.name,
+            "harness": task,
+            "mode": args.mode,
+            "changes": [
+                {
+                    "path": rel,
+                    "kind": kind,
+                    "changed_in_project": rel in moved,
+                    "applied": (rel, kind) in applied,
+                }
+                for rel, kind in delta
+            ],
+            "written": (done or {}).get("written", []),
+            "deleted": (done or {}).get("deleted", []),
+        }
+
     if not todo:
         ctx.log("Nothing left to apply.")
-        return 0
+        return 0, summary()
 
     dirty = A.dirty_paths(ctx.settings, adapter)
     if dirty and not args.force:
-        print(
+        message = (
             "These harness files have uncommitted changes:\n  "
             + "\n  ".join(dirty)
             + "\nCommit or stash them first so the result can be reviewed and undone with git, "
-            "or pass --force.",
-            file=sys.stderr,
+            "or pass --force."
         )
-        return 1
+        print(message, file=sys.stderr)
+        return 1, {"error": message, "exit_code": 1}
     if args.dry_run:
-        return 0
+        return 0, summary()
 
     if args.interactive:
         chosen = _review(todo, current, adopted)
     elif args.yes:
         chosen = todo
     elif not sys.stdin.isatty():
-        print("Not a terminal: pass --yes to apply, or --dry-run to only look.", file=sys.stderr)
-        return 1
+        message = "Not a terminal: pass --yes to apply, or --dry-run to only look."
+        print(message, file=sys.stderr)
+        return 1, {"error": message, "exit_code": 1}
     else:
         chosen = todo if _confirm(f"Apply {len(todo)} change(s)?") else []
     if not chosen:
         ctx.log("Nothing applied.")
-        return 0
+        return 0, summary()
 
     final = dict(current)
     for rel, kind in chosen:
@@ -131,7 +166,7 @@ def run(args, ctx) -> int:
     if args.branch:
         print(f"On branch {args.branch}.")
     print("Review with `git diff`; undo with `git restore` on the files listed above.")
-    return 0
+    return 0, summary(chosen, done)
 
 
 def _delta(rel: str, before: dict, after: dict) -> str:

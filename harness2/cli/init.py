@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import json
 import os
 import shutil
 import subprocess
@@ -89,11 +91,21 @@ def add_parser(sub) -> argparse.ArgumentParser:
 
 
 def run(args, ctx) -> int:
+    if not getattr(args, "json", False):
+        return _run(args)[0]
+    with contextlib.redirect_stdout(sys.stderr):  # the wizard's text; stdout carries the JSON
+        code, summary = _run(args)
+    print(json.dumps(summary))
+    return code
+
+
+def _run(args) -> tuple[int, dict]:
     root = Path(args.project or Path.cwd()).resolve()
     config = S.project_path(root)
     if config.exists() and not args.force:
-        print(f"{config} already exists; pass --force to overwrite it.", file=sys.stderr)
-        return 1
+        message = f"{config} already exists; pass --force to overwrite it."
+        print(message, file=sys.stderr)
+        return 1, {"error": message, "exit_code": 1}
     ask = _asker(interactive=not args.yes and sys.stdin.isatty())
     print(f"Setting up Harness² in {root}\n")
 
@@ -102,12 +114,12 @@ def run(args, ctx) -> int:
     default = next((name for name in ("claude", "codex") if found[name]), None)
     executor = args.executor or (_pick_executor(ask, found, default) if interactive else default)
     if executor is None:
-        print(
+        message = (
             "Neither Claude Code (`claude`) nor Codex (`codex`) is on PATH. Install one, or "
-            "rerun with --executor command to drive your own agent.",
-            file=sys.stderr,
+            "rerun with --executor command to drive your own agent."
         )
-        return 1
+        print(message, file=sys.stderr)
+        return 1, {"error": message, "exit_code": 1}
 
     command_lines = ""
     editable: list[str] = []
@@ -159,7 +171,14 @@ def run(args, ctx) -> int:
         "  harness2 doctor            check the agent CLIs, keys and tasks\n"
         "  harness2 run --dry-run     preview what a run will do and how many calls it makes"
     )
-    return 0
+    return 0, {
+        "config": str(config),
+        "executor": executor,
+        "model": model,
+        "improver": {"channel": channel, "model": improver},
+        "auth": auth,
+        "harness": harness,
+    }
 
 
 def _asker(*, interactive: bool):
