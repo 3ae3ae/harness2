@@ -50,23 +50,25 @@ def _endpoint(path: Path, host: str, port: int) -> dict:
     return endpoint
 
 
-def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__)
+def _arguments(p):
     p.add_argument("--model", required=True)
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=0)
-    args = p.parse_args(argv)
+    return p
 
+
+def add_parser(subparsers):
+    return _arguments(subparsers.add_parser("bridge"))
+
+
+def run(args, ctx):
     litellm = Path(sys.executable).with_name("litellm")
     if not litellm.is_file():
-        p.exit(1, "LiteLLM is not installed; run: uv pip install -e '.[bridge]'\n")
-    try:
-        config = settings.load(settings.find_project(Path.cwd()))
-        provider_name, model = providers.split_model(args.model)
-        provider = config.provider(provider_name)
-        params = providers.litellm_params(provider, model)
-    except ConfigError as exc:
-        p.exit(1, f"{exc}\n")
+        raise ConfigError("LiteLLM is not installed; run: uv pip install -e '.[bridge]'")
+    config = ctx.settings
+    provider_name, model = providers.split_model(args.model)
+    provider = config.provider(provider_name)
+    params = providers.litellm_params(provider, model)
 
     root = settings.cache_dir() / "bridge"
     endpoint = _endpoint(root / "bridge.json", args.host, args.port)
@@ -86,19 +88,40 @@ def main(argv=None):
         encoding="utf-8",
     )
 
-    print("Provider configuration:")
-    print(
+    snippet = (
         "[providers.bridge]\n"
         'type = "openai"\n'
         f'base_url = "http://127.0.0.1:{port}/v1"\n'
-        'api_key_env = "HARNESS2_BRIDGE_KEY"',
+        'api_key_env = "HARNESS2_BRIDGE_KEY"'
     )
-    print("\nEnvironment:")
-    print(f"HARNESS2_BRIDGE_KEY={endpoint['key']}", flush=True)
+    ctx.out(
+        {"provider": snippet, "environment": {"HARNESS2_BRIDGE_KEY": endpoint["key"]}},
+        lambda data: (
+            "Provider configuration:\n"
+            + data["provider"]
+            + "\n\nEnvironment:\nHARNESS2_BRIDGE_KEY="
+            + data["environment"]["HARNESS2_BRIDGE_KEY"]
+        ),
+    )
+    sys.stdout.flush()
 
     env = {**os.environ, "HARNESS2_BRIDGE_KEY": endpoint["key"]}
     command = [str(litellm), "--config", str(litellm_config), "--host", args.host]
     os.execve(str(litellm), [*command, "--port", str(port)], env)
+    return 0
+
+
+def main(argv=None):
+    from ._common import Context
+
+    p = _arguments(argparse.ArgumentParser())
+    args = p.parse_args(argv)
+    args.project, args.profile, args.config = None, None, []
+    args.json, args.quiet, args.verbose = False, False, False
+    try:
+        return run(args, Context(args, {}))
+    except ConfigError as exc:
+        p.exit(1, f"{exc}\n")
 
 
 if __name__ == "__main__":

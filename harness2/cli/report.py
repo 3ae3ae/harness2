@@ -12,24 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Render the score report for one cell from cached judged.json rows — read-only.
-
-The figure each benchmark reports per (mode, k) — partial credit and all-criteria pass on LAB,
-one score elsewhere — with pick provenance, the k=1 noise-floor note and the sanity warnings;
-fell-back counts and improver spend come from the task summaries.
-
-    python3 -m harness2.cli.report --bench jb --substrate oc --k 1,2
-"""
+"""Render cached scores for one or more runs."""
 
 from __future__ import annotations
 
-import argparse
 import json
-import sys
 from pathlib import Path
 
 from ..core import report as R
 from ..core import schedule as SCHED
+from ..settings import ConfigError
 from . import _common as C
 from .judge import _load_rows
 
@@ -42,8 +34,7 @@ def _spend_and_fallbacks(ns_dir: Path, modes: tuple[str, ...], k: int) -> tuple[
         try:
             summary = json.loads(summary_path.read_text())
         except (OSError, json.JSONDecodeError) as exc:
-            print(f"  ! skipping unreadable {summary_path}: {exc}", flush=True)
-            continue
+            raise ConfigError(f"cannot read {summary_path}: {exc}") from exc
         records = SCHED._modes_of(summary)
         for mode in modes:
             key = (mode, k)
@@ -55,60 +46,41 @@ def _spend_and_fallbacks(ns_dir: Path, modes: tuple[str, ...], k: int) -> tuple[
     return fell_back, usd
 
 
-def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(
-        prog="harness2.cli.report", description=__doc__, formatter_class=C.HelpFormatter
-    )
-    C.add_cell_args(p.add_argument_group("cell"))
-    g = p.add_argument_group("run identity (names the sweeps)")
-    g.add_argument("--k", default="1", help="comma list of scales to report, e.g. 1,2,3")
-    g.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="stream-order seed of the sweep; omit for the seedless namespace",
-    )
-    C.add_modes_arg(g)
-    args = p.parse_args(argv)
-    modes = C.parse_modes(args.modes)
-    try:
-        ks = sorted({int(s) for s in args.k.split(",") if s.strip()})
-    except ValueError:
-        raise SystemExit(f"--k takes a comma list of ints, got {args.k!r}")
-    if not ks:
-        raise SystemExit("--k named no scale")
+def add_parser(subparsers):
+    p = subparsers.add_parser("report")
+    p.add_argument("names", nargs="*")
+    return p
 
-    adapter = C.make_adapter(args.bench, args.subset, args.substrate)
-    rows, fell_back, usd = [], {}, {}
-    for k in ks:
-        ns_dir = C.runs_root_for(adapter) / C.summary_namespace(adapter, k, seed=args.seed)
-        judged = ns_dir / "judged.json"
-        got = _load_rows(judged)
-        if not got:
-            print(f"  ! no judged rows at {judged} — run cli.judge for k={k} first", flush=True)
-            continue
-        rows.extend(r for r in got if r.mode in modes)
-        fb, sp = _spend_and_fallbacks(ns_dir, modes, k)
-        fell_back.update(fb)
-        usd.update(sp)
-    if not rows:
-        raise SystemExit("nothing to report")
 
-    title = (
-        f"{adapter.spec.name}-{adapter.substrate.name}"
-        + (f" seed={args.seed}" if args.seed is not None else "")
-        + f" modes={','.join(C.mode_label(m) for m in modes)}"
-    )
-    summaries = R.summarise(rows, fell_back=fell_back, usd=usd)
-    print(R.render(summaries, title=title, bench=adapter.spec.name))
-    spend = sum(s.usd for s in summaries)
-    if spend:
-        print(
-            f"\n  improver (editors, composer, selection, reflection) spend across reported modes: "
-            f"${spend:.2f}"
+def run(args, ctx) -> int:
+    reports, rows = [], []
+    for name in args.names or [None]:
+        root = C.resolve_run(ctx, name)
+        record = C.load_run(root)
+        scored, fallbacks, spend = [], {}, {}
+        for path in sorted((root / "adapt").glob("*/judged.json")):
+            got = _load_rows(path)
+            scored.extend(got)
+            for k in {row.k for row in got}:
+                fb, usd = _spend_and_fallbacks(
+                    path.parent, tuple({row.mode for row in got if row.k == k}), k
+                )
+                for key, value in fb.items():
+                    fallbacks[key] = fallbacks.get(key, 0) + value
+                for key, value in usd.items():
+                    spend[key] = spend.get(key, 0) + value
+        rows.extend(
+            {"name": root.name, **row.__dict__, "frac": row.frac, "graded": row.graded}
+            for row in scored
         )
+        reports.append(
+            R.render(
+                R.summarise(scored, fell_back=fallbacks, usd=spend),
+                title=root.name,
+                bench=record["suite"],
+            )
+        )
+    if not rows:
+        raise ConfigError("nothing to report")
+    ctx.out(rows, lambda _: "\n\n".join(reports))
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
