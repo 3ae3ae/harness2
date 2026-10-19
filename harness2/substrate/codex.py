@@ -268,7 +268,12 @@ def parse_items(path: Path) -> list[dict]:
         raw = Path(path).read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         return [{"type": "_read_error", "message": str(e)}]
-    raw = raw.replace("\x00", "")
+    return parse_items_text(raw)
+
+
+def parse_items_text(text: str) -> list[dict]:
+    """Parse an exec JSONL string, keeping the last state of each thread item."""
+    raw = text.replace("\x00", "")
 
     events: list[dict] = []
     by_id: dict[str, int] = {}

@@ -25,7 +25,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from dataclasses import dataclass
 from importlib.metadata import entry_points
 from pathlib import Path
 from types import SimpleNamespace
@@ -127,19 +126,8 @@ class PluginTests(unittest.TestCase):
             with self.subTest(kind=kind, model=model), self.assertRaises(ValueError):
                 config.resolve_channel_model(kind, model)
 
-    def test_channels_supply_new_runtime_fields_when_available(self):
-        @dataclass
-        class Channel:
-            kind: str
-            model: str
-            effort: str
-            steps: int
-            timeout: int
-            bin: str = ""
-            provider: object = None
-
+    def test_channels_supply_pinned_opencode_and_vertex_provider(self):
         with (
-            patch.object(config, "ChannelSpec", Channel),
             patch.object(config, "VERTEX_PROJECT", "test-project"),
             patch.object(config, "VERTEX_REGION", "test-region"),
         ):
@@ -153,10 +141,7 @@ class PluginTests(unittest.TestCase):
             self.assertEqual(ch.provider.region, "test-region")
             self.assertEqual((ch.steps, ch.timeout), (3, 4))
             self.assertEqual(config.resolve_channel_model("claude_cli", "claude-x").bin, "")
-        with (
-            patch.object(config, "ChannelSpec", Channel),
-            patch.object(config, "VERTEX_PROJECT", ""),
-        ):
+        with patch.object(config, "VERTEX_PROJECT", ""):
             self.assertIsNone(config.resolve_channel_model("opencode", "provider/model").provider)
 
     def test_dependency_paths_use_cache_or_env(self):

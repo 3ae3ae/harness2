@@ -1,0 +1,5 @@
+harness2
+
+[render]
+openpyxl<4,>=3.1
+python-pptx<2,>=1

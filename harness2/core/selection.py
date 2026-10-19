@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence, TypeVar
 
-from . import context
+from . import context, runmark
 from . import prompts as P
 from .proposer import Proposer, ProposerError
 from .spec import BenchmarkAdapter, BenchPrompts, RunView, resolve_prompts
@@ -352,7 +352,9 @@ def run_selection(
     sel.chosen_run_id = pool[sel.chosen_label].run_id
     sel.chosen_is_base = _is_base(sel.chosen_label)
 
-    _persist(sel, root, str(pool[sel.chosen_label].run_dir if sel.chosen_label in pool else ""))
+    _persist(
+        sel, root, runmark.relative_path(pool[sel.chosen_label].run_dir, adapter.spec.runs_root)
+    )
 
     return sel
 
@@ -395,7 +397,7 @@ def trivial_selection(
     root = Path(work_dir) / "selection" / f"{mode}{k}"
     shutil.rmtree(root, ignore_errors=True)
     root.mkdir(parents=True, exist_ok=True)
-    _persist(sel, root, str(pool[label].run_dir))
+    _persist(sel, root, runmark.relative_path(pool[label].run_dir, adapter.spec.runs_root))
     return sel
 
 
@@ -447,7 +449,11 @@ def reflect_adoption(
         task_id, sel, candidates, adapter=adapter, prop=prop, root=root, layout=evidence.layout
     )
     sel.experience = experience
-    _persist(sel, Path(work_dir) / "selection" / f"{sel.mode}{sel.k}", str(chosen.run_dir))
+    _persist(
+        sel,
+        Path(work_dir) / "selection" / f"{sel.mode}{sel.k}",
+        runmark.relative_path(chosen.run_dir, adapter.spec.runs_root),
+    )
     return experience
 
 

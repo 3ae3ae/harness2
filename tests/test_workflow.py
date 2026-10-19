@@ -20,11 +20,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from harness2 import config
 from harness2.core import context, judge, recursion, schedule, tree
 from harness2.core.library import Library
 from harness2.core.proposer import Proposer, ProposerError, Reply
-from harness2.core.spec import resolve_channel_model
+from harness2.core.runmark import resolve_path
+from harness2.core.spec import ChannelSpec
 from harness2.demo import BASE_SCRIPT, DemoAdapter, DemoProposer
 
 
@@ -48,13 +48,8 @@ class WorkflowTests(unittest.TestCase):
         )
 
     def test_recursion_budget_and_resume(self):
-        with patch.dict(config.PROPOSER_MODEL_BY_CHANNEL, {"opencode": "", "claude_cli": ""}):
-            unresolved = resolve_channel_model(None, None)
-            self.assertEqual(unresolved.model, "")
-            with self.assertRaises(ValueError):
-                Proposer(unresolved)
-            with self.assertRaises(ValueError):
-                resolve_channel_model("opencode", "")
+        with self.assertRaises(ValueError):
+            Proposer(ChannelSpec("opencode", ""))
         for k in (1, 2):
             with self.subTest(k=k):
                 result = self.run_stream(k)
@@ -74,7 +69,11 @@ class WorkflowTests(unittest.TestCase):
                         selection = summary["selections"][mode]
                         expected = "Total: 85.15\n" if task_id == "ledger-1" else "Total: 20.25\n"
                         self.assertEqual(
-                            self.adapter.deliverable_text(Path(selection["chosen_run_dir"])),
+                            self.adapter.deliverable_text(
+                                resolve_path(
+                                    selection["chosen_run_dir"], self.adapter.spec.runs_root
+                                )
+                            ),
                             expected,
                         )
                 executions, calls = self.adapter.execution_count, len(self.proposer._calls)
@@ -101,7 +100,9 @@ class WorkflowTests(unittest.TestCase):
         repaired = self.run_stream()
         self.assertEqual([row["status"] for row in repaired["tasks"]], ["ok", "skipped"])
         chosen = json.loads(summary_path.read_text())["selections"]["agg"]
-        (Path(chosen["chosen_run_dir"]) / "answer.txt").unlink()
+        (
+            resolve_path(chosen["chosen_run_dir"], self.adapter.spec.runs_root) / "answer.txt"
+        ).unlink()
         repaired = self.run_stream()
         self.assertEqual([row["status"] for row in repaired["tasks"]], ["ok", "skipped"])
 
@@ -138,7 +139,6 @@ class WorkflowTests(unittest.TestCase):
 
         proposer = Proposer(self.proposer.spec)
         with (
-            patch("harness2.core.proposer._opencode_dir", return_value=self.root),
             patch("harness2.core.proposer.subprocess.run", side_effect=run_opencode),
         ):
             for index in range(2):
