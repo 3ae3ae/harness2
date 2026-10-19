@@ -210,7 +210,15 @@ class CodexSubstrate:
     def install_into(self, install: Install, workspace: Path) -> None:
         self.export_tree(self.import_tree(install.staging_dir), workspace, base={})
 
-    def argv(self, prompt_file: Path, workspace: Path, model: str, effort: str) -> list[str]:
+    def argv(
+        self,
+        prompt_file: Path,
+        workspace: Path,
+        model: str,
+        effort: str,
+        *,
+        provider: providers.Provider | None = None,
+    ) -> list[str]:
         return [
             *cli_argv(self.bin, "codex"),
             "exec",
@@ -219,6 +227,7 @@ class CodexSubstrate:
             "--dangerously-bypass-approvals-and-sandbox",
             "--dangerously-bypass-hook-trust",
             "--ephemeral",
+            *providers.codex_args(provider, model, effort),
             "-C",
             str(workspace),
             "-",
@@ -229,10 +238,19 @@ class CodexSubstrate:
         home.mkdir(parents=True, exist_ok=True)
         (home / "config.toml").write_text(content, encoding="utf-8")
 
-    def env(self, base_env: Mapping[str, str], home: Path) -> dict[str, str]:
+    def env(
+        self,
+        base_env: Mapping[str, str],
+        home: Path | None,
+        *,
+        provider: providers.Provider | None = None,
+    ) -> dict[str, str]:
+        stripped = providers.STRIP_ENV
+        if provider is not None and provider.type == "chatgpt-login":
+            stripped += ("OPENAI_API_KEY", "CODEX_API_KEY")
         return {
-            **{k: v for k, v in base_env.items() if k not in providers.STRIP_ENV},
-            "CODEX_HOME": str(home),
+            **{k: v for k, v in base_env.items() if k not in stripped},
+            **({"CODEX_HOME": str(home)} if home is not None else {}),
         }
 
     def final_message(self, stream_path: Path) -> str:

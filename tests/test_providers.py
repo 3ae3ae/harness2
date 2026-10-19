@@ -43,7 +43,10 @@ class ProviderTests(unittest.TestCase):
         provider = Provider("custom", "anthropic")
         with self.assertRaises(FrozenInstanceError):
             provider.region = "changed"
-        self.assertEqual(providers.PROVIDER_TYPES, ("anthropic", "openai", "vertex", "bedrock"))
+        self.assertEqual(
+            providers.PROVIDER_TYPES,
+            ("anthropic", "openai", "vertex", "bedrock", "claude-login", "chatgpt-login"),
+        )
         self.assertEqual(
             providers.STRIP_ENV,
             (

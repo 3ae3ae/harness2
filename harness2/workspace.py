@@ -30,6 +30,13 @@ from .settings import ConfigError
 def project_workspace(project: Path, ref: str) -> Iterator[Path]:
     ws = Path(tempfile.mkdtemp(prefix="harness2-ws-")).resolve()
     try:
+        pruned = subprocess.run(
+            ["git", "-C", str(project), "worktree", "prune"],
+            capture_output=True,
+            text=True,
+        )
+        if pruned.returncode:
+            raise ConfigError(f"cannot prune project worktrees: {pruned.stderr.strip()}")
         result = subprocess.run(
             ["git", "-C", str(project), "worktree", "add", "--detach", "--", str(ws), ref],
             capture_output=True,

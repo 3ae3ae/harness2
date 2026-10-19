@@ -16,7 +16,9 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+from pathlib import Path
 
 from .. import providers, registry
 from ..core.proposer import Proposer
@@ -79,7 +81,7 @@ def run(args, ctx) -> int:
                 if channel == "claude":
                     providers.claude_env(provider)
                 elif channel == "codex":
-                    providers.codex_config(provider, bare, role["effort"])
+                    providers.codex_args(provider, bare, role["effort"])
                 elif channel == "opencode":
                     providers.opencode_config(provider, bare)
                 if channel != "command":
@@ -128,6 +130,16 @@ def run(args, ctx) -> int:
                 "detail": "; ".join(problems) or detail,
             }
         )
+    if any(config.provider(name).type == "chatgpt-login" for name in referenced):
+        agents = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "AGENTS.md"
+        if agents.is_file() and (text := agents.read_text(encoding="utf-8")):
+            rows.append(
+                {
+                    "check": "Codex global AGENTS.md",
+                    "ok": True,
+                    "detail": f"your global AGENTS.md ({len(text)} characters) is part of every Codex run",
+                }
+            )
     if args.live:
         for (channel, model), spec in sorted(models.items()):
 
