@@ -27,41 +27,13 @@ import os
 import shutil
 import sys
 
-GUIDE = """\
-You are helping a person use Harness² (the `harness2` command) in the project at {root}.
+from . import guide as G
 
-Harness² improves the harness of a coding agent -- the files the agent reads on every run:
-CLAUDE.md or AGENTS.md, skills, subagents, helper scripts and hooks. It runs the agent on the
-person's own tasks, has an improver propose harness edits from what those runs show, probes
-the edits on the same tasks, and composes the best of them. A run never changes the project's
-files; `harness2 apply` writes an adopted harness back once the person has reviewed it.
+CHAT_INTRO = """\
+You are talking with a person about Harness² (the `harness2` command) in the project at
+{root}. Help them write tasks, a check or a rubric, read a run's results, and decide what to
+apply. The guide below is how to use harness2.
 
-How you help:
-- Writing tasks. A task is a directory .harness2/tasks/<id>/ holding task.md -- the
-  instruction the agent receives, written the way the person would really ask -- and an
-  optional task.toml with: domain, split ("train" or "test"), workspace ("project": a clean
-  checkout of the repository at `ref`; "files": a scratch directory seeded from files/),
-  ref, deliverable ("diff", "files" or "message"), check (a shell command that grades the
-  result), timeout. check/ and rubric.md hold grading material that neither the agent nor
-  the improver ever sees. Good tasks are real, varied work the person wants done better; a
-  check command or a rubric.md makes the results measurable.
-- Reading results. A run lives in .harness2/runs/<name>/: run.json (its settings),
-  events.jsonl (progress and cost), adapt/<namespace>/<task>/ (summary.json, the candidate
-  harnesses under harnesses/, and the selection/ and reflection/ notes) and library/ (what
-  carries over between tasks in the same domain). `harness2 status`, `harness2 report` and
-  `harness2 diff` summarise them.
-- Settings. `harness2 config show --origin` prints every setting and where it came from;
-  `harness2 config set KEY VALUE` changes one.
-
-Rules:
-- `harness2 run`, `harness2 judge` and `harness2 doctor --live` call models and cost money.
-  Propose the exact command and let the person run or approve it.
-- Never edit anything under .harness2/runs/.
-- Do not edit the project's harness files to apply a result; `harness2 apply` does that
-  after review.
-
-Current state of this project:
-{state}
 """
 
 
@@ -82,7 +54,11 @@ def run(args, ctx) -> int:
     if not binary:
         print("Neither `claude` nor `codex` is on PATH.", file=sys.stderr)
         return 1
-    guide = GUIDE.format(root=ctx.project, state=_state(ctx))
+    guide = (
+        CHAT_INTRO.format(root=ctx.project)
+        + G.GUIDE
+        + f"\n## This project\n\n{G.state_lines(ctx)}\n"
+    )
     if tool == "claude":
         argv = [binary, "--append-system-prompt", guide]
     else:
@@ -97,24 +73,3 @@ def _default_tool(settings) -> str | None:
         if tool in ("claude", "codex") and shutil.which(tool):
             return tool
     return "codex" if shutil.which("codex") else None
-
-
-def _state(ctx) -> str:
-    s = ctx.settings
-    lines = [
-        f"- executor: {s.get('executor.name')} on {s.get('executor.model') or '(model not set)'}",
-        f"- improver: {s.get('improver.channel')} on {s.get('improver.model') or '(not set)'}",
-        f"- harness directory: {s.get('paths.harness')}",
-    ]
-    tasks_dir = s.path("paths.tasks")
-    tasks = sorted(p.parent.name for p in tasks_dir.glob("*/task.md"))
-    shown = ", ".join(tasks[:30]) + (" ..." if len(tasks) > 30 else "")
-    lines.append(f"- tasks ({len(tasks)}): {shown or 'none yet'}")
-    runs_dir = s.path("paths.runs")
-    runs = sorted(
-        (p for p in runs_dir.glob("*/run.json")), key=lambda p: p.stat().st_mtime, reverse=True
-    )
-    lines.append(
-        "- runs, newest first: " + (", ".join(p.parent.name for p in runs[:10]) or "none yet")
-    )
-    return "\n".join(lines)

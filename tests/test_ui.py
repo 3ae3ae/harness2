@@ -1,6 +1,7 @@
 """The interactive commands: init, status, apply and the human selector."""
 
 import argparse
+import io
 import json
 import os
 import sys
@@ -14,7 +15,8 @@ from harness2.core.spec import ChannelSpec
 
 
 class _Ctx:
-    def __init__(self, project: Path):
+    def __init__(self, project: Path, json: bool = False):
+        self.args = argparse.Namespace(json=json)
         self.project = project
         self.settings = type("S", (), {"path": lambda _self, key: project})()
         self.logged: list[str] = []
@@ -84,6 +86,39 @@ class UiTests(unittest.TestCase):
         self.assertEqual(
             written, {"CLAUDE.md": "base\nmy rule\n", "a.md": "a run\n", "b.md": "b mine\n"}
         )
+
+    def test_apply_json_reports_the_plan_and_refuses_to_ask(self):
+        base, adopted = {"CLAUDE.md": "a\n"}, {"CLAUDE.md": "a\nb\n"}
+        args = argparse.Namespace(
+            name=None, task=None, mode="parallel", interactive=False, yes=False,
+            branch=None, dry_run=False, force=False,
+        )  # fmt: skip
+        patches = (
+            patch.object(apply.A, "open_run", return_value=(None, self.root / "run")),
+            patch.object(apply.A, "harness_for", return_value=("consolidated", adopted)),
+            patch.object(apply.A, "base_tree", return_value=base),
+            patch.object(apply.A, "project_tree", return_value=dict(base)),
+            patch.object(apply.A, "dirty_paths", return_value=[]),
+        )
+        for item in patches:
+            item.start()
+            self.addCleanup(item.stop)
+        out = io.StringIO()
+        with patch("sys.stdout", out):
+            self.assertEqual(apply.run(args, _Ctx(self.root, json=True)), 1)
+        self.assertIn("--yes or --dry-run", json.loads(out.getvalue())["error"])
+        args.dry_run, out = True, io.StringIO()
+        with patch("sys.stdout", out), patch("sys.stderr"):
+            self.assertEqual(apply.run(args, _Ctx(self.root, json=True)), 0)
+        plan = json.loads(out.getvalue())
+        self.assertEqual(plan["changes"][0]["path"], "CLAUDE.md")
+        self.assertFalse(plan["changes"][0]["applied"])
+
+    def test_guide_mentions_every_agent_contract(self):
+        from harness2.cli import guide
+
+        for needle in ("--json", "--detach", "--max-calls", "harness2 stop", "apply", "130"):
+            self.assertIn(needle, guide.GUIDE)
 
     def test_status_reads_tasks_and_spend_from_events(self):
         run = self.root / "run"
