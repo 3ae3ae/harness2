@@ -106,7 +106,10 @@ def snapshot(run_dir: Path) -> dict:
             if row["state"] == "running":
                 row["state"] = "stopped"
     plan = meta.get("schedule", {})
+    process = C.run_process(run_dir)
     return {
+        "active": process is not None,
+        "pid": process["pid"] if process else None,
         "run": meta.get("name", run_dir.name),
         "suite": meta.get("suite", ""),
         "executor": meta.get("executor", ""),
@@ -126,6 +129,8 @@ def render(snap: dict) -> str:
     head = f"{snap['run']} · {snap['suite']} suite · {snap['executor']}"
     if snap["k"]:
         head += f" · k={snap['k']} {snap['modes']}"
+    if snap.get("active"):
+        head += f" · running (pid {snap['pid']})"
     last = snap["last_event"]
     lines = [
         head,
@@ -156,6 +161,10 @@ def render(snap: dict) -> str:
         lines.append(f"run {'finished' if status == 'ok' else 'ended: ' + status}{why}{tail}")
     elif last:
         lines.append(f"latest: {_describe(last)}")
+        if not snap.get("active"):
+            lines.append(
+                "not running: it stopped without finishing; run the same command to resume"
+            )
     return "\n".join(lines)
 
 
