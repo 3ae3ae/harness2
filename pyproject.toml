@@ -3,9 +3,9 @@ requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "harness2"
+name = "harness2-cli"
 version = "0.1.0"
-description = "Tune your coding agent's harness on your own tasks"
+description = "General-purpose CLI for Harness²: tune any coding agent's harness on your own tasks"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12,<3.14"
@@ -21,7 +21,8 @@ authors = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/3ae3ae/harness2"
+Homepage = "https://github.com/3ae3ae/harness2-cli"
+Upstream = "https://github.com/google-research/harness2"
 Paper = "https://arxiv.org/abs/2610.14224"
 
 [project.optional-dependencies]

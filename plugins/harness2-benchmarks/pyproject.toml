@@ -23,7 +23,7 @@ description = "The Harness² paper benchmarks (JobBench, LAB, WorkBuddy-Bench) a
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12,<3.14"
-dependencies = ["harness2"]
+dependencies = ["harness2-cli"]
 
 [project.optional-dependencies]
 render = ["openpyxl>=3.1,<4", "python-pptx>=1,<2"]

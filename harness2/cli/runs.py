@@ -16,9 +16,12 @@
 
 from __future__ import annotations
 
+import shutil
+import sys
 from datetime import datetime, timezone
 
 from . import _common as C
+from . import status as S
 
 
 def add_parser(subparsers):
@@ -27,6 +30,9 @@ def add_parser(subparsers):
     commands.add_parser("ls", help="list runs with their progress and spend")
     show = commands.add_parser("show", help="show a run's settings, totals and tasks")
     show.add_argument("name", help="run name")
+    rm = commands.add_parser("rm", help="delete a run and everything it stored")
+    rm.add_argument("name", help="run name")
+    rm.add_argument("-y", "--yes", action="store_true", help="delete without asking")
     return p
 
 
@@ -56,7 +62,10 @@ def describe(root) -> dict:
 
 def run(args, ctx) -> int:
     if args.action == "show":
-        ctx.out(describe(C.resolve_run(ctx, args.name)), str)
+        root = C.resolve_run(ctx, args.name)
+        ctx.out(describe(root), lambda data: _show(root, data))
+    elif args.action == "rm":
+        return _rm(ctx, C.resolve_run(ctx, args.name), args.yes)
     else:
         ctx.project
         root = ctx.settings.path("paths.runs")
@@ -83,11 +92,49 @@ def run(args, ctx) -> int:
                     "last_activity": detail["last_activity"],
                 }
             )
-        ctx.out(
-            rows,
-            lambda data: "\n".join(
-                f"{row['name']}\t{row['suite']}\t{row['executor']}\t{row['done']}/{row['total']}\t${row['spent_usd']:.6f}\t{row['last_activity']}"
-                for row in data
-            ),
+        ctx.out(rows, _table)
+    return 0
+
+
+def _table(rows: list[dict]) -> str:
+    if not rows:
+        return "No runs yet; start one with `harness2 run`."
+    head = ("NAME", "SUITE", "EXECUTOR", "TASKS", "SPENT", "LAST ACTIVITY")
+    body = [
+        (
+            r["name"],
+            r["suite"],
+            r["executor"],
+            f"{r['done']}/{r['total']}",
+            f"${r['spent_usd']:.2f}",
+            S._when(r["last_activity"]),
         )
+        for r in rows
+    ]
+    widths = [max(len(row[i]) for row in (head, *body)) for i in range(len(head))]
+    return "\n".join(
+        "  ".join(cell.ljust(w) for cell, w in zip(row, widths)).rstrip() for row in (head, *body)
+    )
+
+
+def _show(root, data: dict) -> str:
+    settings = data["run"]["settings"]
+    keys = ("executor.name", "executor.model", "improver.channel", "improver.model")
+    lines = [S.render(S.snapshot(root)), "", "Settings:"]
+    lines += [f"  {key} = {settings[key]}" for key in keys if key in settings]
+    return "\n".join(lines)
+
+
+def _rm(ctx, root, yes: bool) -> int:
+    size = sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
+    if not yes:
+        if not sys.stdin.isatty():
+            print("Not a terminal: pass --yes to delete.", file=sys.stderr)
+            return 1
+        question = f"Delete run {root.name} and everything it stored ({size / 1e6:.1f} MB)? [y/N] "
+        if input(question).strip().lower() != "y":
+            ctx.log("Nothing deleted.")
+            return 0
+    shutil.rmtree(root)
+    ctx.log(f"Deleted run {root.name}.")
     return 0

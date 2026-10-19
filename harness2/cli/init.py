@@ -26,9 +26,16 @@ from pathlib import Path
 from .. import settings as S
 from ..core import tree as HT
 
-DEFAULTS = {
-    "claude": ("anthropic/claude-sonnet-5-5", "claude", "anthropic/claude-opus-5-5"),
-    "codex": ("openai/gpt-6.1-sol", "codex", "openai/gpt-6.1-sol"),
+# executor/channel -> (model that runs tasks, model that edits the harness)
+MODELS = {
+    "claude": ("claude-sonnet-5-5", "claude-opus-5-5"),
+    "codex": ("gpt-6.1-sol", "gpt-6.1-sol"),
+}
+# executor/channel -> (subscription provider, API-key provider)
+PROVIDERS = {"claude": ("claude-login", "anthropic"), "codex": ("chatgpt-login", "openai")}
+AUTH = {
+    "claude": ("your Claude subscription, through Claude Code's own login", "ANTHROPIC_API_KEY"),
+    "codex": ("your ChatGPT subscription, through Codex's own login", "OPENAI_API_KEY"),
 }
 
 CONFIG = """\
@@ -48,7 +55,7 @@ model = {improver}
 # The selector picks the final harness when several candidates compete, and the judge
 # grades tasks that have a rubric.md. Both use the improver's settings unless set here.
 # [selector]
-# model = "anthropic/claude-sonnet-5-5"
+# model = {selector_example}
 
 [paths]
 # Where the harness lives, relative to the project root.
@@ -73,6 +80,11 @@ def add_parser(sub) -> argparse.ArgumentParser:
     p.add_argument("--yes", "-y", action="store_true", help="take every default, ask nothing")
     p.add_argument("--force", action="store_true", help="overwrite an existing config file")
     p.add_argument("--executor", choices=("claude", "codex", "command"), help="skip that question")
+    p.add_argument(
+        "--auth",
+        choices=("login", "api-key"),
+        help="use the agent CLI's own login (subscription) or a provider API key",
+    )
     return p
 
 
@@ -105,10 +117,15 @@ def run(args, ctx) -> int:
         editable = [g for g in editable if g]
         command_lines = COMMAND_LINES.format(command=_q(command), editable=_q(editable))
         channel = "claude" if found["claude"] else "codex"
-        model, improver = DEFAULTS[channel][0], DEFAULTS[channel][2]
     else:
-        model, channel, improver = DEFAULTS[executor]
-    model = ask("Model that runs the tasks (provider/model)", model)
+        channel = executor
+    auth = args.auth or (_pick_auth(ask, channel) if interactive else "login")
+    provider = PROVIDERS[channel][auth != "login"]
+    model, improver = (f"{provider}/{m}" for m in MODELS[channel])
+    if executor == "command":
+        model = ""
+    if executor != "command":
+        model = ask("Model that runs the tasks (provider/model)", model)
     improver = ask("Model that edits the harness (provider/model)", improver)
     harness = ask("Where the harness lives, relative to the project root", ".")
 
@@ -121,6 +138,7 @@ def run(args, ctx) -> int:
             channel=_q(channel),
             improver=_q(improver),
             harness=_q(harness),
+            selector_example=_q(improver),
         ),
         encoding="utf-8",
     )
@@ -208,14 +226,31 @@ def _harness_summary(where: Path, executor: str, editable: list[str]) -> str:
     return f"Harness found in {where}: {', '.join(parts)}."
 
 
+def _pick_auth(ask, channel: str) -> str:
+    login, key = AUTH[channel]
+    print(f"\nHow should {channel} reach its models?")
+    print(f"  1) {login}")
+    print(f"  2) an API key in {key}")
+    while True:
+        answer = ask("Choose", "1")
+        if answer in ("1", "2"):
+            return "login" if answer == "1" else "api-key"
+        print("Type 1 or 2.")
+
+
 def _key_summary(root: Path, models: tuple[str, ...]) -> str:
-    """Whether the API key each chosen model needs is visible to harness2."""
+    """Whether each chosen model can be reached: the CLI login, or the API key."""
     from .. import providers
 
     S.load_dotenv(root / ".harness2/.env")
     loaded = S.load(None)
     lines = []
     for name in dict.fromkeys(providers.split_model(m)[0] for m in models if "/" in m):
+        if name in LOGIN_CHECKS:
+            argv, cli, fix = LOGIN_CHECKS[name]
+            ok = shutil.which(argv[0]) and _quiet(argv)
+            lines.append(f"{cli} is logged in." if ok else f"{cli} is not logged in: run `{fix}`.")
+            continue
         try:
             env = loaded.provider(name).api_key_env
         except S.ConfigError:
@@ -232,3 +267,16 @@ def _key_summary(root: Path, models: tuple[str, ...]) -> str:
 
 def _q(value) -> str:
     return S._literal(value)
+
+
+LOGIN_CHECKS = {
+    "claude-login": (["claude", "auth", "status"], "Claude Code", "claude auth login"),
+    "chatgpt-login": (["codex", "login", "status"], "Codex", "codex login"),
+}
+
+
+def _quiet(argv: list[str]) -> bool:
+    try:
+        return subprocess.run(argv, capture_output=True, timeout=20).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
