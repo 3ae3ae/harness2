@@ -52,7 +52,7 @@ def _build_parser() -> argparse.ArgumentParser:
     C.add_run_identity_args(p.add_argument_group("run identity (enters the namespace)"))
     g = p.add_argument_group("run control")
     g.add_argument("--split", choices=("all", "train", "test"), default="all")
-    g.add_argument("--split-file", type=Path, help="optional partition from scripts/split_tasks.py")
+    g.add_argument("--split-file", type=Path, help="optional partition from plugins/harness2-benchmarks/scripts/split_tasks.py")
     g.add_argument("--workers", type=int, default=1, help="domains to run concurrently")
     g.add_argument(
         "--only-domains", default="", help="comma list restricting the sweep to these domains"
@@ -140,7 +140,7 @@ def _main(args: argparse.Namespace) -> int:
 
     adapter = C.make_adapter(args.bench, args.subset, args.substrate, args.split_file)
     _stream_for(adapter, args)
-    from ..preflight import require_ready
+    from harness2_benchmarks.preflight import require_ready
 
     require_ready(adapter, judge=True)
 
