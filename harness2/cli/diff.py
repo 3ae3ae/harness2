@@ -45,15 +45,18 @@ def run(args, ctx) -> int:
         adapter, root = _adopt.open_run(ctx, args.name)
     task, after = _adopt.harness_for(adapter, root, args.task, args.mode)
     before = _adopt.base_tree(adapter)
-    data = (
-        diff_summary(adapter.substrate.surface(), before, after)
-        if args.stat
-        else {
-            "task": task,
-            "diff": "".join(
-                _adopt.unified(rel, before, after) for rel, _ in _adopt.changes(before, after)
-            ),
-        }
+    changes = _adopt.changes(before, after)
+    data = {
+        "label": task,
+        "changes": changes,
+        "diffs": {rel: _adopt.unified(rel, before, after) for rel, _ in changes},
+    }
+    ctx.out(
+        data,
+        lambda row: (
+            str(diff_summary(adapter.substrate.surface(), before, after))
+            if args.stat
+            else "".join(row["diffs"].values()).rstrip("\n")
+        ),
     )
-    ctx.out(data, str if args.stat else lambda row: row["diff"].rstrip("\n"))
     return 0

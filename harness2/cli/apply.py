@@ -141,6 +141,10 @@ def _apply(args, ctx) -> tuple[int, dict]:
     if args.dry_run:
         return 0, summary()
 
+    if args.interactive and not sys.stdin.isatty():
+        message = "--interactive needs a terminal; use --yes or --dry-run instead."
+        print(message, file=sys.stderr)
+        return 1, {"error": message, "exit_code": 1}
     if args.interactive:
         chosen = _review(todo, current, adopted)
     elif args.yes:

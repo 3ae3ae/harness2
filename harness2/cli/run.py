@@ -17,7 +17,11 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import core, registry
@@ -80,6 +84,9 @@ def add_parser(subparsers):
     p.add_argument("--steer", metavar="TEXT|@FILE", help="guidance added to every improver session")
     p.add_argument(
         "--dry-run", action="store_true", help="show the tasks and the model calls; run nothing"
+    )
+    p.add_argument(
+        "--detach", action="store_true", help="start the run in the background and return at once"
     )
     return p
 
@@ -159,15 +166,58 @@ def _print_stream(data) -> str:
     return "\n".join(lines)
 
 
+def _detach(args, ctx, name: str, root: Path) -> int:
+    root.mkdir(parents=True, exist_ok=True)
+    log = root / "run.log"
+    argv = [arg for arg in args.argv if arg != "--detach"]
+    if args.name is None:
+        argv.extend(["--name", name])
+    with log.open("a", encoding="utf-8") as output:
+        child = subprocess.Popen(
+            [sys.executable, "-m", "harness2", *argv],
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    try:
+        code = child.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        code = None
+    if code:
+        print(
+            "\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-20:]),
+            file=sys.stderr,
+        )
+        return code
+    ctx.out(
+        {"name": name, "pid": child.pid, "log": log},
+        lambda data: (
+            f"Started run {name} in the background (pid {data['pid']}).\n"
+            f"Follow it: harness2 status {name} --watch\n"
+            f"Stop it:   harness2 stop {name}\n"
+            f"Log:       {log}"
+        ),
+    )
+    return 0
+
+
 def run(args, ctx) -> int:
     events.start(None)
     status, reason, name = "error", "", args.name or ""
+    pid_path = None
     try:
+        if args.detach and args.dry_run:
+            raise ConfigError("--detach starts a real run; drop --dry-run")
         project, config = ctx.project, ctx.settings
         k, seed = config.get("run.k"), config.get("run.seed")
         modes = C.parse_modes(config.get("run.modes"))
         name = args.name or C.default_name(config)
         root = C.run_path(ctx, name)
+        if not args.dry_run and (process := C.run_process(root)) is not None:
+            raise ConfigError(f"run {name} is already running (pid {process['pid']})")
+        if args.detach:
+            return _detach(args, ctx, name, root)
         suite = registry.load(config.get("suite.name"))
         split_file = (project / args.split_file).resolve() if args.split_file else None
         suite_ctx = registry.SuiteContext(config, project, root, split_file)
@@ -227,6 +277,18 @@ def run(args, ctx) -> int:
                 **filters,
                 "split_file": str(split_file) if split_file else None,
             },
+        )
+        pid_path = root / "run.pid"
+        pid_path.write_text(
+            json.dumps(
+                {
+                    "pid": os.getpid(),
+                    "started": datetime.now(timezone.utc).isoformat(),
+                    "argv": args.argv,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
         )
         core.configure(
             **{
@@ -297,6 +359,8 @@ def run(args, ctx) -> int:
                     "Run the same command again to retry.",
                     file=sys.stderr,
                 )
+        if errors and args.json:
+            raise ConfigError(reason)
         ctx.out(
             {"result": result, "totals": events.totals(), "final": final},
             lambda data: (
@@ -312,15 +376,27 @@ def run(args, ctx) -> int:
     except events.Stopped as exc:
         reason = str(exc)
         status = "interrupted" if reason == "interrupted" else "stopped"
-        ctx.out(events.totals(), lambda totals: _stopped(name, reason, totals))
+        ctx.out(
+            {"error": "interrupted", "exit_code": 130}
+            if status == "interrupted" and args.json
+            else events.totals(),
+            lambda totals: _stopped(name, reason, totals),
+        )
         return 130 if status == "interrupted" else 4
     except KeyboardInterrupt:
         status, reason = "interrupted", "interrupted"
         events.request_stop(reason)
-        ctx.out(events.totals(), lambda totals: _stopped(name, reason, totals))
+        ctx.out(
+            {"error": "interrupted", "exit_code": 130} if args.json else events.totals(),
+            lambda totals: _stopped(name, reason, totals),
+        )
         return 130
     except Exception as exc:
         reason = str(exc)
         raise
     finally:
-        events.emit("run_end", status=status, reason=reason)
+        try:
+            events.emit("run_end", status=status, reason=reason)
+        finally:
+            if pid_path is not None:
+                pid_path.unlink(missing_ok=True)

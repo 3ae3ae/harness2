@@ -49,6 +49,9 @@ def add_parser(sub) -> argparse.ArgumentParser:
 
 
 def run(args, ctx) -> int:
+    if not sys.stdin.isatty():
+        print("harness2 chat is a conversation and needs a terminal.", file=sys.stderr)
+        return 1
     tool = args.tool or _default_tool(ctx.settings)
     binary = shutil.which(tool) if tool else None
     if not binary:

@@ -119,6 +119,34 @@ def resolve_run(ctx: Context, name: str | None) -> Path:
     return max(runs, key=lambda p: p.stat().st_mtime_ns)
 
 
+def run_process(run_dir: Path) -> dict | None:
+    path = run_dir / "run.pid"
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(record, dict)
+            or type(record.get("pid")) is not int
+            or record["pid"] <= 0
+            or not isinstance(record.get("started"), str)
+            or not isinstance(record.get("argv"), list)
+            or any(not isinstance(arg, str) for arg in record["argv"])
+        ):
+            raise ValueError("invalid run process record")
+    except FileNotFoundError:
+        return None
+    except ValueError:
+        path.unlink(missing_ok=True)
+        return None
+    try:
+        os.kill(record["pid"], 0)
+    except ProcessLookupError:
+        path.unlink(missing_ok=True)
+        return None
+    except PermissionError:
+        pass
+    return record
+
+
 def load_run(run_dir: Path) -> dict:
     try:
         record = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
