@@ -428,7 +428,10 @@ class CliTests(unittest.TestCase):
         fake.new_task = Mock(return_value=self.project / "task.md")
         fake.list_tasks = Mock(return_value=rows)
         fake.import_tasks = Mock(return_value=["x"])
-        with patch.dict(sys.modules, {"harness2.suite": fake}):
+        with (
+            patch.dict(sys.modules, {"harness2.suite": fake}),
+            patch("harness2.suite", fake, create=True),
+        ):
             self.assertEqual(
                 self.invoke(
                     "--json", "task", "new", "x", "--files", "--domain", "d", "--check", "true"
