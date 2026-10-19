@@ -91,11 +91,11 @@ def _apply(args, ctx) -> tuple[int, dict]:
     todo = [(rel, kind) for rel, kind in delta if args.force or rel not in moved]
 
     label = (
-        "consolidated from the run's tasks"
+        f"Final harness of run {run_dir.name} ({args.mode})"
         if args.task is None and task == "consolidated"
-        else f"adopted for {task}"
+        else f"Harness adopted for {task} (run {run_dir.name}, {args.mode})"
     )
-    print(f"Harness {label} ({args.mode}, run {run_dir.name}) -> {where}\n")
+    print(f"{label} -> {where}\n")
     for rel, kind in delta:
         mark = "!" if rel in moved else kind
         print(f"  {mark} {rel:<48} {_delta(rel, current, adopted)}")

@@ -107,7 +107,7 @@ def _run(args) -> tuple[int, dict]:
         print(message, file=sys.stderr)
         return 1, {"error": message, "exit_code": 1}
     ask = _asker(interactive=not args.yes and sys.stdin.isatty())
-    print(f"Setting up Harness² in {root}\n")
+    print(f"Setting up Harness² in {root}")
 
     interactive = not args.yes and sys.stdin.isatty()
     found = {name: _version(name) for name in ("claude", "codex")}
@@ -159,7 +159,6 @@ def _run(args) -> tuple[int, dict]:
         ignore.write_text("runs/\n.env\n", encoding="utf-8")
     (config.parent / "tasks").mkdir(exist_ok=True)
 
-    print()
     print(_harness_summary(root / harness, executor, editable))
     print(_key_summary(root, (model, improver)))
     print(f"\nWrote {config.relative_to(root)}")

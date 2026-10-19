@@ -136,7 +136,8 @@ def render(snap: dict) -> str:
         head,
         f"started {_when(snap['created'])}"
         + (f" · last activity {_ago(last.get('t'))}" if last else "")
-        + f" · ${snap['spent_usd']:.2f} spent · {snap['calls']} model calls",
+        + (f" · ${snap['spent_usd']:.2f} spent" if snap["spent_usd"] else " · spend not reported")
+        + f" · {snap['calls']} model calls",
         "",
     ]
     if rows:
