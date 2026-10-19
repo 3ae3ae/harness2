@@ -29,6 +29,7 @@ COMMANDS = (
     "task",
     "run",
     "status",
+    "stop",
     "judge",
     "report",
     "runs",
@@ -94,14 +95,20 @@ def main(argv: list[str] | None = None) -> int:
                 break
         argv.insert(index, alias)
     args = build_parser().parse_args(argv)
+    args.argv = argv
     ctx = Context(args, getattr(args._module, "FLAGS", {}))
     try:
         ctx.debug(f"command: {args.command}")
         return args._module.run(args, ctx)
     except KeyboardInterrupt:
+        if args.json:
+            ctx.out({"error": "interrupted", "exit_code": 130}, str)
         return 130
     except (OSError, RuntimeError, ValueError, KeyError) as exc:
-        ctx.log(f"error: {exc}")
+        if args.json:
+            ctx.out({"error": str(exc), "exit_code": 1}, str)
+        else:
+            ctx.log(f"error: {exc}")
         return 1
 
 

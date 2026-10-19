@@ -48,7 +48,8 @@ project's files; `harness2 apply` writes the final harness back once the person 
 
 1. `harness2 init --yes [--executor claude|codex] [--auth login|api-key]` creates
    .harness2/. `--auth login` uses the agent CLI's own login (a Claude or ChatGPT
-   subscription).
+   subscription). Change any choice afterwards with `harness2 config set KEY VALUE`, for
+   example `executor.model`.
 2. Tasks. `harness2 task new <id> [--files] [--check "<cmd>"]`, then write the request in
    .harness2/tasks/<id>/task.md the way the person would really ask for it. Good tasks are
    real, varied work the person wants done better. A `check` command (exit status 0 means

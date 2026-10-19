@@ -312,14 +312,14 @@ class CliTests(unittest.TestCase):
                 code, stdout, _ = self.invoke("--json", "diff", name)
                 self.assertEqual(code, 0)
                 diff = json.loads(stdout)
-                self.assertEqual(diff["task"], "consolidated")
-                self.assertIn("-total = sum", diff["diff"])
-                self.assertIn("+total = sum", diff["diff"])
+                self.assertEqual(diff["label"], "consolidated")
+                self.assertIn("-total = sum", diff["diffs"]["scripts/summarize.py"])
+                self.assertIn("+total = sum", diff["diffs"]["scripts/summarize.py"])
                 code, stdout, _ = self.invoke(
                     "--json", "diff", name, "--task", "ledger-1", "--mode", "sequential", "--stat"
                 )
                 self.assertEqual(code, 0)
-                self.assertIn("scripts/summarize.py", json.loads(stdout)["modified"])
+                self.assertIn(["scripts/summarize.py", "M"], json.loads(stdout)["changes"])
                 self.assertEqual(self.invoke("diff", name, "--task", "missing")[0], 1)
                 self.assertEqual(self.invoke("--json", "judge", name, "--bases")[0], 0)
                 code, stdout, _ = self.invoke("--json", "runs", "show", name)
