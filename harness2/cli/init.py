@@ -37,7 +37,7 @@ MODELS = {
 PROVIDERS = {"claude": ("claude-login", "anthropic"), "codex": ("chatgpt-login", "openai")}
 AUTH = {
     "claude": ("your Claude subscription, through Claude Code's own login", "ANTHROPIC_API_KEY"),
-    "codex": ("your ChatGPT subscription, through Codex's own login", "OPENAI_API_KEY"),
+    "codex": ("your ChatGPT subscription, through a Codex login for harness2", "OPENAI_API_KEY"),
 }
 
 CONFIG = """\
@@ -264,6 +264,16 @@ def _key_summary(root: Path, models: tuple[str, ...]) -> str:
     loaded = S.load(None)
     lines = []
     for name in dict.fromkeys(providers.split_model(m)[0] for m in models if "/" in m):
+        if name == "chatgpt-login":
+            home = providers.codex_login_home(loaded.provider(name))
+            ok = providers.codex_logged_in(home)
+            lines.append(
+                "Codex is signed in for harness2."
+                if ok
+                else "Codex is not signed in for harness2 yet: run `harness2 login codex` once "
+                "(a separate login, so your own ~/.codex settings and hooks stay out of runs)."
+            )
+            continue
         if name in LOGIN_CHECKS:
             argv, cli, fix = LOGIN_CHECKS[name]
             ok = shutil.which(argv[0]) and _quiet(argv)
@@ -289,7 +299,6 @@ def _q(value) -> str:
 
 LOGIN_CHECKS = {
     "claude-login": (["claude", "auth", "status"], "Claude Code", "claude auth login"),
-    "chatgpt-login": (["codex", "login", "status"], "Codex", "codex login"),
 }
 
 

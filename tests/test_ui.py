@@ -114,6 +114,25 @@ class UiTests(unittest.TestCase):
         self.assertEqual(plan["changes"][0]["path"], "CLAUDE.md")
         self.assertFalse(plan["changes"][0]["applied"])
 
+    def test_login_status_uses_the_harness2_codex_home(self):
+        from harness2.cli import login
+
+        homes = []
+        ctx = _Ctx(self.root)
+        ctx.settings = type("S", (), {"provider": lambda _self, name: None})()
+        with (
+            patch.object(login.providers, "codex_login_home", return_value=self.root / "h"),
+            patch.object(login.providers, "codex_logged_in", side_effect=homes.append),
+            patch.object(login, "_ok", return_value=True),
+            patch.object(login.shutil, "which", return_value="/bin/claude"),
+            patch("sys.stdout", io.StringIO()) as out,
+        ):
+            args = argparse.Namespace(service=None, device=False)
+            self.assertEqual(login.run(args, ctx), 0)
+        self.assertEqual(homes, [self.root / "h"])
+        self.assertIn("claude-login", out.getvalue())
+        self.assertIn("harness2 login codex", out.getvalue())
+
     def test_guide_mentions_every_agent_contract(self):
         from harness2.cli import guide
 

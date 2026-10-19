@@ -13,7 +13,7 @@ The first release of Harness² CLI, a general-purpose version of
 ### Added
 
 - One `harness2` command with subcommands: `init`, `doctor`, `task`, `run`, `status`,
-  `stop`, `diff`, `eval`, `apply`, `judge`, `report`, `runs`, `config`, `chat`, `guide`,
+  `stop`, `diff`, `eval`, `apply`, `judge`, `report`, `runs`, `config`, `chat`, `guide`, `login`,
   `setup`, `demo`, `bridge`, `completion`.
 - Your own tasks: `.harness2/tasks/<id>/task.md` with optional `task.toml`, run in a clean
   git worktree of your repository or in a scratch directory, graded optionally by a `check`
@@ -21,8 +21,9 @@ The first release of Harness² CLI, a general-purpose version of
 - Claude Code and command executors. A project's own harness (CLAUDE.md, `.claude/skills`,
   `.claude/agents`, `.claude/scripts`, hooks; or AGENTS.md, `.agents/`, `.codex/hooks.json`)
   is imported as the starting harness.
-- Subscriptions: `claude-login/<model>` and `chatgpt-login/<model>` use the login of the
-  installed `claude` or `codex`, with the user's personal setup kept out of the runs.
+- Subscriptions: `claude-login/<model>` runs on Claude Code's own login and
+  `chatgpt-login/<model>` on a Codex login kept for harness2 (`harness2 login codex`), with
+  personal settings, hooks, plugins and instructions kept out of the runs.
 - Any model provider: Anthropic, OpenAI, OpenAI- or Anthropic-compatible servers, Vertex AI
   and Bedrock, through provider profiles; `harness2 bridge` serves any of them to Codex.
 - Layered settings: defaults, `~/.config/harness2/config.toml`, `.harness2/config.toml`,
