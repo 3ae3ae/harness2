@@ -49,7 +49,13 @@ def run(args, ctx) -> int:
         result = suite.new_task(
             tasks_dir, args.id, files=args.files, domain=args.domain, check=args.check
         )
-        ctx.out({"path": result}, lambda data: str(data["path"]))
+        ctx.out(
+            {"path": result},
+            lambda data: (
+                f"Created {data['path']}. Write the request in its task.md"
+                + (" and put the input files in files/." if args.files else ".")
+            ),
+        )
     elif args.action == "ls":
         ctx.out(
             suite.list_tasks(tasks_dir),

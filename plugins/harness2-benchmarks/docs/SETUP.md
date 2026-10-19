@@ -27,8 +27,16 @@ Keep the main Harness² environment active when running the commands below.
 
 ## Models and credentials
 
-Copy `.env.example` to `.harness2/.env` if you have not already done so. Set your Vertex AI
-project and model IDs, then authenticate:
+Put your Vertex AI project and model IDs in `.harness2/.env` (or export them in the
+shell), then authenticate:
+
+```bash
+# .harness2/.env
+GOOGLE_CLOUD_PROJECT=my-gcp-project
+HARNESS2_SOLVER_MODEL=google-vertex/gemini-3.5-flash
+HARNESS2_IMPROVER_MODEL=google-vertex/gemini-3.5-flash
+HARNESS2_JUDGE_MODEL=gemini-3.5-flash
+```
 
 ```bash
 gcloud auth application-default login
@@ -105,20 +113,28 @@ return a nonzero exit status when incomplete.
 ## Codex executor
 
 The Codex executor connects to a Responses API endpoint. For Gemini on Vertex
-AI, the included `harness2-bridge` provides this interface through a local
-LiteLLM server, using the same Application Default Credentials and
-`GOOGLE_CLOUD_PROJECT`.
+AI, `harness2 bridge` provides this interface through a local LiteLLM server, using
+the same Application Default Credentials.
 
-Install the optional dependencies and start the bridge in a separate session:
+Add a Vertex provider to `.harness2/config.toml`, install the optional dependencies and
+start the bridge in a separate session:
+
+```toml
+[providers.vertex]
+type = "vertex"
+project = "my-gcp-project"
+region = "global"
+```
 
 ```bash
 uv pip install -e '.[bridge]' -e 'plugins/harness2-benchmarks[render]'
-harness2-bridge                 # for WorkBuddy: harness2-bridge --host 0.0.0.0
+harness2 bridge --model vertex/gemini-3.5-flash   # for WorkBuddy: add --host 0.0.0.0
 ```
 
-The bridge prints the `HARNESS2_CODEX_*` settings to add to `.harness2/.env`. Its port and
-generated access key are stored under `~/.cache/harness2/bridge/` and reused on
-restart. Pass `-c executor.name=codex` to setup, checks, refinement, judging, and
+The bridge prints its endpoint and access key. Set `HARNESS2_CODEX_BASE_URL` to that
+endpoint (`http://127.0.0.1:<port>/v1`), `HARNESS2_CODEX_API_KEY` to the key and
+`HARNESS2_CODEX_MODEL` to the model name in `.harness2/.env`. The port and key are stored
+under `~/.cache/harness2/bridge/` and reused on restart. Pass `-c executor.name=codex` to setup, checks, refinement, judging, and
 reporting:
 
 ```bash
@@ -129,8 +145,9 @@ harness2 -c executor.name=codex run --suite lab --k 1 --mode parallel \
 ```
 
 WorkBuddy executes Codex inside Docker containers, so the bridge must listen on
-`--host 0.0.0.0`; it also prints `HARNESS2_CODEX_CONTAINER_URL`. This binds the
-bridge to all network interfaces; restrict access to the intended clients.
+`--host 0.0.0.0`, and `HARNESS2_CODEX_CONTAINER_URL` must give the address the containers
+reach it at, usually `http://host.docker.internal:<port>/v1`. This binds the bridge to all
+network interfaces; restrict access to the intended clients.
 
 To use another Responses API endpoint, set `HARNESS2_CODEX_BASE_URL`,
 `HARNESS2_CODEX_API_KEY`, and `HARNESS2_CODEX_MODEL` directly. Setup records the

@@ -1,6 +1,6 @@
 {
   "third_party/jb_runner/LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
-  "third_party/jb_runner/PROVENANCE.md": "ef40bc6abe5ce4e1367e454cc8a4b18a23be59db43ea42650cce5d0771ba4444",
+  "third_party/jb_runner/PROVENANCE.md": "db5d8237e3670dcdc098fb93f7b6b57b255b6c6b38dc6e37824561491d1bb1d9",
   "third_party/jb_runner/codex_base_harness/AGENTS.md": "b5df5264478dfce7d6af52f8443a1797b17967d1bc4a8c4f8c5fe43933516a89",
   "third_party/jb_runner/harness_baseline_oc/LongTermMEMORY.md": "c78b55245ef1433c017bc3f6f796094e16c640b98543836f6d930972243d28d2",
   "third_party/jb_runner/harness_baseline_oc/guardrails.md": "ebd0b0f287bcc9bea5efa063d632677b3c0fdf014c7b67bec088c11253605a53",

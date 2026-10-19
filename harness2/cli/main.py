@@ -24,22 +24,22 @@ from importlib.metadata import version
 from ._common import Context
 
 COMMANDS = (
-    "run",
+    "init",
     "doctor",
-    "setup",
+    "task",
+    "run",
+    "status",
     "judge",
     "report",
     "runs",
     "diff",
-    "task",
+    "apply",
     "config",
+    "chat",
+    "setup",
     "demo",
     "bridge",
     "completion",
-    "init",
-    "status",
-    "chat",
-    "apply",
 )
 ALIASES = {"harness2-" + name: name for name in ("judge", "report", "setup", "demo", "bridge")}
 ALIASES["harness2-check"] = "doctor"
