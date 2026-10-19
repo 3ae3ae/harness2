@@ -68,7 +68,7 @@ def add_parser(subparsers):
             help="serve a model as a Responses API endpoint for Codex",
             description="Serve any configured provider/model as an OpenAI Responses API "
             "endpoint through LiteLLM, so Codex can run on it. Needs the bridge extra: "
-            "pip install 'harness2[bridge]'.",
+            "pip install 'harness2-cli[bridge]'.",
         )
     )
 

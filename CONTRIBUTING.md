@@ -1,8 +1,9 @@
 # Contributing
 
-Issues and pull requests are welcome. This is an independent fork of
+Issues and pull requests are welcome. Harness² CLI is an independent fork of
 [google-research/harness2](https://github.com/google-research/harness2); changes here are
-not sent upstream.
+not sent upstream. Every pull request runs the tests and ruff in CI, and notable changes go
+in [CHANGELOG.md](CHANGELOG.md) under "Unreleased".
 
 ## Development setup
 

@@ -1,9 +1,10 @@
 <h3 align="center">
   <img src="assets/Harness2-wordmark.png" alt="Harness²" width="360"><br>
-  Tune your coding agent's harness on your own tasks
+  Harness² CLI: tune your coding agent's harness on your own tasks
 </h3>
 
 <p align="center">
+  <a href="https://github.com/3ae3ae/harness2-cli/actions/workflows/ci.yml"><img src="https://github.com/3ae3ae/harness2-cli/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://arxiv.org/abs/2610.14224"><img src="https://img.shields.io/badge/Paper-arXiv-EA4335?logo=arxiv&logoColor=white" alt="Paper"></a>
   <a href="https://harness2.github.io"><img src="https://img.shields.io/badge/Website-harness2.github.io-4285F4?logo=googlechrome&logoColor=white" alt="Website"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-34A853" alt="License"></a>
@@ -13,22 +14,24 @@ A coding agent is a model plus a **harness**: the instructions, skills, subagent
 scripts and hooks it runs with. `harness2` improves the harness of the agent you already use
 (Claude Code's `CLAUDE.md` and `.claude/`, or Codex's `AGENTS.md` and `.agents/`) by running
 it on tasks from your own project, studying what happened, and refining the harness from
-that evidence. The model stays the same. Your files change only when you apply a result you
-have reviewed.
+that evidence. The model stays the same. Your files change only when you apply the result.
 
-It is a general-purpose command-line tool built on the method of
+Harness² CLI is a general-purpose version of
 [Harness²: Recursive Agent Harnessing for an Open World](https://arxiv.org/abs/2610.14224).
-This repository is an independent fork of
-[google-research/harness2](https://github.com/google-research/harness2); the paper's
-benchmark setup lives on as a [plugin](plugins/harness2-benchmarks/).
+The original release ([google-research/harness2](https://github.com/google-research/harness2))
+reproduces the paper on three fixed benchmarks with Vertex AI. This fork turns the same method
+into a command-line tool for any project, any task, Claude Code or Codex (or your own agent),
+on your subscription or any model provider. [What changed](#what-changed-from-the-original)
+lists the differences; the paper's benchmark setup lives on as a
+[plugin](plugins/harness2-benchmarks/).
 
 - [How it works](#how-it-works)
 - [Install](#install)
 - [Quick start](#quick-start)
+- [Driving it from an agent](#driving-it-from-an-agent)
 - [Commands](#commands)
 - [Configuration](#configuration)
-- [Other agents](#other-agents)
-- [The paper's benchmarks](#the-papers-benchmarks)
+- [What changed from the original](#what-changed-from-the-original)
 - [Documentation](#documentation)
 
 ## How it works
@@ -38,13 +41,18 @@ For every task you give it, `harness2`:
 1. runs your agent with its current harness and records what it does;
 2. has an improver agent propose harness edits from those trajectories, from two angles:
    how the agent works, and what it needs to know about this kind of task;
-3. runs the agent with each candidate harness, and composes a final one from what the
+3. runs the agent with each candidate harness, and composes a refined one from what the
    differences between the runs show;
-4. keeps the adopted harness and a short lesson for the next task in the same area.
+4. keeps the refined harness and a short lesson for the next task in the same area.
 
-No step needs a grade or a reference answer, so any task you can describe can be used.
-If you can also check the result, with a test command or a rubric, `harness2 judge` measures
-how much the adopted harness helped. [How it works](docs/how-it-works.md) has the details.
+When all tasks are done, it combines what the tasks taught into **one final harness** for
+your project. That is the single result you review with `harness2 diff` and write into the
+project with `harness2 apply`.
+
+No step needs a grade or a reference answer, so any task you can describe can be used. If
+you can also check results, with a test command or a rubric, `harness2 eval` measures the
+final harness against the one you started with. [How it works](docs/how-it-works.md) has
+the details.
 
 <p align="center">
   <a href="assets/harness2_pipeline.png">
@@ -54,116 +62,135 @@ how much the adopted harness helped. [How it works](docs/how-it-works.md) has th
 
 ## Install
 
-You need Python 3.12 or 3.13, git, and the agent CLI whose harness you want to tune:
+You need Python 3.12 or 3.13, git, and the agent CLI whose harness you want to tune,
+installed, on your `PATH` and logged in:
 [Claude Code](https://docs.claude.com/en/docs/claude-code) (`claude`) or
-[Codex](https://github.com/openai/codex) (`codex`), installed and on your `PATH`.
+[Codex](https://github.com/openai/codex) (`codex`).
 
 ```bash
-uv tool install git+https://github.com/3ae3ae/harness2
-# or: pipx install git+https://github.com/3ae3ae/harness2
+uv tool install git+https://github.com/3ae3ae/harness2-cli
+# or: pipx install git+https://github.com/3ae3ae/harness2-cli
 ```
 
-Runs call models through your provider's API, so set the key for the models you choose,
-for example `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. Model calls cost money; the
-[quick start](#quick-start) shows how to see the cost of a run before you start it.
+By default runs use the CLI's own login, so a Claude or ChatGPT subscription is enough. You
+can use an API key or another provider instead; see [Configuration](#configuration). Runs
+make many model calls and use money or subscription quota: the [quick start](#quick-start)
+shows how to see the number of calls first and how to cap them.
 
 ## Quick start
 
 Inside the project whose agent setup you want to improve:
 
 ```bash
-harness2 init                          # pick the agent and models, creates .harness2/
+harness2 init                          # pick the agent, how it logs in, where the harness lives
 harness2 task new fix-login-redirect   # then write the request in .harness2/tasks/fix-login-redirect/task.md
-harness2 doctor                        # check CLIs, keys and tasks
-harness2 run --dry-run                 # the task order and how many model calls a run makes
-harness2 run                           # refine the harness on every task
+harness2 doctor                        # check the CLI, its login and the tasks
+harness2 run --dry-run                 # the tasks and how many model calls a run makes
+harness2 run --max-calls 200           # refine the harness on every task, then build the final one
 ```
 
 A run works in temporary git worktrees, so your working tree is never touched. While it
-runs, or after it stops:
+runs, from another terminal:
 
 ```bash
 harness2 status --watch                # progress, spend, the harness picked per task
-harness2 judge && harness2 report      # grade the results of tasks that have a check or rubric
-harness2 diff                          # what the adopted harness changes
-harness2 apply                         # review it and write it into the project
 ```
 
-Run `harness2 run` again to resume an interrupted run; finished steps are reused. Write a
-few varied tasks that look like the work you really do: see [Tasks](docs/tasks.md).
+When it has finished:
+
+```bash
+harness2 diff                          # what the final harness changes
+harness2 eval                          # optional: compare it with your current harness on graded tasks
+harness2 apply                         # review the changes and write them into the project
+```
+
+Running `harness2 run` again resumes an interrupted or limited run and reuses every finished
+step. Write a few varied tasks that look like the work you really do: see
+[Tasks](docs/tasks.md).
+
+## Driving it from an agent
+
+`harness2` is built to be driven by an AI agent as well as by hand. Every command has
+`--json`, errors included; no command waits for input without a terminal, since every prompt
+has a flag; and long runs go to the background with `harness2 run --detach`, are followed with
+`harness2 status --json` and are stopped with `harness2 stop`.
+
+`harness2 guide` prints the contract for agents, with your project's current state. Tell your
+agent to read it, or install it as a Claude Code skill:
+
+```bash
+harness2 guide --install claude
+```
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `harness2 init` | Set up `.harness2/` in a project, with a short interactive wizard |
-| `harness2 doctor` | Check the agent CLIs, provider keys, settings and tasks; `--live` also makes one tiny model call per model |
+| `harness2 init` | Set up `.harness2/` in a project, with a short wizard (`--yes` for defaults) |
+| `harness2 doctor` | Check the agent CLIs, their login or keys, settings and tasks; `--live` also makes one tiny call per model |
 | `harness2 task new / ls / import` | Create, list and import tasks |
-| `harness2 run` | Refine the harness on the tasks; `--dry-run` previews, `--budget-usd` and `--max-calls` cap spending, `--selector human` lets you pick the final harness yourself |
+| `harness2 run` | Refine the harness on the tasks and build the final harness; `--dry-run` previews, `--max-calls` / `--budget-usd` cap spending, `--detach` runs in the background, `--selector human` lets you pick between candidates |
 | `harness2 status` | A run's progress; `--watch` keeps it updated |
-| `harness2 judge` | Grade the result each task adopted |
-| `harness2 report` | Summarise grades, per run |
-| `harness2 runs ls / show` | List runs and inspect one |
-| `harness2 diff` | Show how an adopted harness differs from the starting one |
-| `harness2 apply` | Write an adopted harness into the project, after showing the changes; `-i` to accept file by file |
+| `harness2 stop` | Stop a running run; running it again resumes |
+| `harness2 diff` | What the final harness changes |
+| `harness2 eval` | Compare the final harness with the starting one on graded tasks |
+| `harness2 apply` | Write the final harness into the project after showing the changes; `-i` to accept file by file |
+| `harness2 judge` / `report` | Grade each task's adopted result, and summarise the grades |
+| `harness2 runs ls / show / rm` | List, inspect and delete runs |
 | `harness2 config show / get / set` | Read and change settings; `show --origin` says where each value comes from |
 | `harness2 chat` | Talk to your agent CLI about tasks, runs and results |
+| `harness2 guide` | The guide for AI agents that use harness2 |
 | `harness2 demo` | A local run with scripted editors and no model calls |
 
-Every command takes `--help`. See the [command reference](docs/cli.md) for all flags, exit
+Every command takes `--help`. The [command reference](docs/cli.md) lists every flag, the exit
 codes and the layout of a run directory.
 
 ## Configuration
 
-Settings come from `~/.config/harness2/config.toml`, the project's
-`.harness2/config.toml`, `HARNESS2_*` environment variables and flags, in that order of
-precedence. Models are written `provider/model`; any OpenAI-compatible or
-Anthropic-compatible endpoint, Vertex AI and Bedrock can be used:
+Settings come from `~/.config/harness2/config.toml`, the project's `.harness2/config.toml`,
+`HARNESS2_*` environment variables and flags, in that order of precedence. Models are
+written `provider/model`:
 
 ```toml
 [executor]
 name = "claude"
-model = "anthropic/claude-sonnet-5-5"
+model = "claude-login/claude-sonnet-5-5"   # your Claude subscription, through Claude Code
 
 [improver]
 channel = "claude"
-model = "anthropic/claude-opus-5-5"
-
-[providers.local]                # e.g. a vLLM or LM Studio server
-type = "openai"
-base_url = "http://localhost:8000/v1"
-api_key_env = "LOCAL_API_KEY"
+model = "claude-login/claude-opus-5-5"
 ```
 
-[Configuration](docs/configuration.md) lists every setting.
+`chatgpt-login/<model>` uses your ChatGPT subscription through Codex. API keys and other
+endpoints work too: Anthropic, OpenAI, any OpenAI-compatible or Anthropic-compatible
+server, Vertex AI and Bedrock. To tune an agent other than Claude Code or Codex, the
+`command` executor runs your own command and edits the files you list.
+[Configuration](docs/configuration.md) covers every setting.
 
-## Other agents
+## What changed from the original
 
-To tune an agent other than Claude Code or Codex, use the `command` executor: give it the
-command that runs one task and the files that make up its harness.
+| | google-research/harness2 | Harness² CLI |
+|---|---|---|
+| Tasks | JobBench, LAB, WorkBuddy-Bench | your own tasks, in your repository or from files; the benchmarks as a plugin |
+| Agents | OpenCode, Codex, pinned builds | Claude Code, Codex or any command, as installed on your system |
+| Models | Vertex AI | your Claude or ChatGPT subscription, or any API provider |
+| Result | one adopted harness per task, kept for scoring | one final harness for the project, which you review and apply |
+| Interface | seven scripts, settings in `.env` | one `harness2` command, layered TOML settings, JSON output, background runs, resumable limits |
 
-```toml
-[executor]
-name = "command"
-command = "my-agent --task {prompt_file} --workdir {workspace}"
-editable = ["prompts/*.md", "agent.yaml"]
-```
-
-## The paper's benchmarks
-
-JobBench, LAB and WorkBuddy-Bench, the benchmarks of the paper, are packaged as the
-[harness2-benchmarks plugin](plugins/harness2-benchmarks/). Install it next to `harness2`
-and they become suites: `harness2 run --suite jb`.
+The method itself (propose, probe, compose, and the library of lessons) and its prompts are
+the paper's. [How it works](docs/how-it-works.md) describes what was added around it.
 
 ## Documentation
 
-- [How it works](docs/how-it-works.md): the method, what a run costs, what it stores
+- [How it works](docs/how-it-works.md): the method, the final harness, what a run costs and stores
 - [Tasks](docs/tasks.md): writing tasks, workspaces, grading
-- [Configuration](docs/configuration.md): settings, models and providers
+- [Configuration](docs/configuration.md): settings, subscriptions, models and providers
 - [Command reference](docs/cli.md): every command and flag
-- [Contributing](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md) and [contributing](CONTRIBUTING.md)
 
 ## Citation
+
+If you use Harness² CLI in research, cite the paper:
 
 ```bibtex
 @article{xu2026harness2,
@@ -178,5 +205,6 @@ and they become suites: `harness2 run --suite jb`.
 ## License
 
 Apache 2.0; see [LICENSE](LICENSE). The method and the original implementation are by the
-paper's authors at Google; this fork is not a Google product and is not maintained by
-Google. Third-party code in the benchmarks plugin keeps its upstream licenses.
+paper's authors at Google; Harness² CLI is an independent fork, not a Google product, and is
+not maintained by Google. Third-party code in the benchmarks plugin keeps its upstream
+licenses.
