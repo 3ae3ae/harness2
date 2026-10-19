@@ -19,40 +19,47 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
+import threading
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 
 from .settings import ConfigError
 
+# Rollouts run in threads. `git worktree prune` racing another thread's `worktree add` can
+# delete a worktree that is still being created, so worktree bookkeeping is serialized.
+_WORKTREES = threading.Lock()
+
 
 @contextmanager
 def project_workspace(project: Path, ref: str) -> Iterator[Path]:
     ws = Path(tempfile.mkdtemp(prefix="harness2-ws-")).resolve()
     try:
-        pruned = subprocess.run(
-            ["git", "-C", str(project), "worktree", "prune"],
-            capture_output=True,
-            text=True,
-        )
-        if pruned.returncode:
-            raise ConfigError(f"cannot prune project worktrees: {pruned.stderr.strip()}")
-        result = subprocess.run(
-            ["git", "-C", str(project), "worktree", "add", "--detach", "--", str(ws), ref],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode:
-            raise ConfigError(
-                f"cannot create project workspace at {ref!r}: {result.stderr.strip()}"
-            )
+        with _WORKTREES:
+            _add_worktree(project, ws, ref)
         yield ws
     finally:
-        subprocess.run(
-            ["git", "-C", str(project), "worktree", "remove", "--force", str(ws)],
-            capture_output=True,
-        )
+        with _WORKTREES:
+            subprocess.run(
+                ["git", "-C", str(project), "worktree", "remove", "--force", str(ws)],
+                capture_output=True,
+            )
         shutil.rmtree(ws, ignore_errors=True)
+
+
+def _add_worktree(project: Path, ws: Path, ref: str) -> None:
+    pruned = subprocess.run(
+        ["git", "-C", str(project), "worktree", "prune"], capture_output=True, text=True
+    )
+    if pruned.returncode:
+        raise ConfigError(f"cannot prune project worktrees: {pruned.stderr.strip()}")
+    result = subprocess.run(
+        ["git", "-C", str(project), "worktree", "add", "--detach", "--", str(ws), ref],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode:
+        raise ConfigError(f"cannot create project workspace at {ref!r}: {result.stderr.strip()}")
 
 
 @contextmanager
