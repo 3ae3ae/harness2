@@ -22,8 +22,8 @@ import sys
 from decimal import Decimal
 from pathlib import Path
 
-from .core import tree
-from .core.proposer import Proposer, Reply
+from .core import runmark, tree
+from .core.proposer import Proposer
 from .core.spec import BenchPrompts, BenchSpec, ChannelSpec
 from .substrate.opencode import OpencodeSubstrate
 
@@ -86,8 +86,14 @@ class DemoAdapter:
     def execute(
         self, task_id: str, harness_dir: Path | None, run_id: str, *, timeout: int | None = None
     ) -> Path:
+        run_dir = self.spec.runs_root / "executions" / run_id
+        if (
+            runmark.is_complete(run_dir, harness_dir=harness_dir)
+            and self.delivered(run_dir)
+            and (run_dir / "trajectory.md").is_file()
+        ):
+            return run_dir
         self.execution_count += 1
-        run_dir = self.root / "executions" / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         script = (harness_dir or self.base_harness()) / "scripts/summarize.py"
         result = subprocess.run(
@@ -102,6 +108,7 @@ class DemoAdapter:
             "[ACTION] Run scripts/summarize.py on ledger.csv\n[OBSERVATION]\n" + result.stdout,
             encoding="utf-8",
         )
+        runmark.mark_complete(run_dir, run_id=run_id, harness_dir=harness_dir)
         return run_dir
 
     def delivered(self, run_dir: Path) -> bool:
@@ -120,10 +127,9 @@ class DemoAdapter:
 class DemoProposer(Proposer):
     """Scripted edits and selection; no model service or benchmark judge is used."""
 
-    def call(self, mission, context_dir, label, **kwargs) -> Reply:
-        context = Path(context_dir)
-        workspace = None
-        if label.startswith("select."):
+    def _opencode(self, cwd, mission, system, wall):
+        context = cwd / "context"
+        if (context / "candidates").is_dir():
             with (context / "source/ledger.csv").open() as source:
                 expected = sum(
                     (Decimal(row["amount"]) for row in csv.DictReader(source)), Decimal(0)
@@ -135,7 +141,7 @@ class DemoProposer(Proposer):
             text = (
                 f"<why>The signed total matches the source ledger.</why>\n```choice\n{chosen}\n```"
             )
-        elif label.startswith("experience."):
+        elif (context / "adoption.json").is_file():
             changed = (context / "harness/scripts/summarize.py").read_text() != (
                 context / "base_harness/scripts/summarize.py"
             ).read_text()
@@ -158,6 +164,4 @@ class DemoProposer(Proposer):
             script = workspace / "scripts/summarize.py"
             script.write_text(script.read_text().replace(" if amount > 0", ""), encoding="utf-8")
             text = "<notes>Keep signed amounts: the base total omitted credits in the source ledger.</notes>"
-        reply = Reply(label=label, text=text, ok=True, attempts=1, workspace=workspace)
-        self._calls.append(reply)
-        return reply
+        return text, 0.0, ""

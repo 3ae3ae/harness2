@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from functools import lru_cache
 from pathlib import Path
 
@@ -56,19 +57,27 @@ class SurfaceSpec:
     hook_events: frozenset[str] = frozenset()
     compile_skill_scripts: bool = False
     reject_empty_always_on: bool = False
+    script_dir: str = "scripts"
+    skills_need_trigger: bool = True
+    editable_globs: tuple[str, ...] = ()
 
     stubs: tuple[tuple[str, str], ...] = ()
 
 
 @lru_cache(maxsize=8)
-def _res(surface_name: str, skill_dir: str, plugin_dir: str | None) -> dict[str, re.Pattern]:
+def _res(
+    surface_name: str, skill_dir: str, plugin_dir: str | None, script_dir: str
+) -> dict[str, re.Pattern]:
     sd = re.escape(skill_dir)
+    scripts = re.escape(script_dir)
     out = {
         "skill": re.compile(rf"{sd}/({_NAME})/SKILL\.md"),
         "skill_script": re.compile(rf"{sd}/{_NAME}/scripts/[A-Za-z0-9_.\-]+"),
         "subagent": re.compile(rf"sub_agents/({_NAME})/AGENT\.md"),
-        "script": re.compile(r"scripts/[a-z0-9_][a-z0-9_]*\.py"),
-        "script_ref": re.compile(rf"(?:python3?\s+)((?:{sd}/[\w\-]+/)?scripts/[\w.\-]+\.py)"),
+        "script": re.compile(rf"{scripts}/[a-z0-9_][a-z0-9_]*\.py"),
+        "script_ref": re.compile(
+            rf"(?:python3?\s+)((?:{sd}/[\w\-]+/scripts|{scripts})/[\w.\-]+\.py)"
+        ),
     }
     if plugin_dir is not None:
         out["plugin"] = re.compile(rf"{re.escape(plugin_dir)}/({_NAME})\.ts")
@@ -76,7 +85,7 @@ def _res(surface_name: str, skill_dir: str, plugin_dir: str | None) -> dict[str,
 
 
 def _rx(surface: SurfaceSpec) -> dict[str, re.Pattern]:
-    return _res(surface.name, surface.skill_dir, surface.plugin_dir)
+    return _res(surface.name, surface.skill_dir, surface.plugin_dir, surface.script_dir)
 
 
 def normalize_rel(rel: str) -> str:
@@ -95,6 +104,8 @@ def is_allowed(surface: SurfaceSpec, rel: str) -> bool:
         rel = normalize_rel(rel)
     except ValueError:
         return False
+    if surface.editable_globs:
+        return any(fnmatchcase(rel, g) for g in surface.editable_globs)
     if rel in surface.always_on:
         return True
     if surface.hooks_file is not None and rel == surface.hooks_file:
@@ -150,7 +161,9 @@ def read_tree(surface: SurfaceSpec, d: Path | str, *, rejected: list[str] | None
 
 def is_tree(surface: SurfaceSpec, d: Path | str) -> bool:
     d = Path(d)
-    return d.is_dir() and any((d / a).is_file() for a in surface.always_on)
+    return d.is_dir() and (
+        bool(surface.editable_globs) or any((d / a).is_file() for a in surface.always_on)
+    )
 
 
 def write_tree(surface: SurfaceSpec, tree: Tree, dest: Path | str, *, stubs: bool = True) -> Path:
@@ -194,6 +207,8 @@ def autotrigger(surface: SurfaceSpec, tree: Tree, *, always_on_max: int | None =
 
     A line that would push the body over the always-on cap is skipped instead.
     """
+    if not surface.skills_need_trigger:
+        return []
     cap = surface.always_on_max if always_on_max is None else always_on_max
     body = always_on_text(surface, tree)
     fixed: list[str] = []
@@ -289,7 +304,7 @@ def _check_skills(surface: SurfaceSpec, tree: Tree, body: str, errs: list[str]) 
                 f"trigger line naming `{name}` stops matching; drop the `name:` line "
                 f"or make it `name: {name}`"
             )
-        if name not in body:
+        if surface.skills_need_trigger and name not in body:
             errs.append(
                 f"skill '{name}' is never named in the always-on text, so the agent "
                 f"will not know to invoke it — an untriggered skill is dead weight. "
@@ -358,21 +373,25 @@ def validate(
             f"this framework, so an empty one is a harness that does not exist"
         )
 
-    skills = _check_skills(surface, tree, body, errs)
-    subs = _check_subagents(surface, tree, allow_subagents, errs)
+    skills = [] if surface.editable_globs else _check_skills(surface, tree, body, errs)
+    subs = [] if surface.editable_globs else _check_subagents(surface, tree, allow_subagents, errs)
 
     for rel, src in tree.items():
-        if r["script"].fullmatch(rel) or (
+        if surface.editable_globs:
+            if rel.endswith(".py") and is_allowed(surface, rel):
+                _py_compiles(rel, src, errs)
+        elif r["script"].fullmatch(rel) or (
             surface.compile_skill_scripts
             and r["skill_script"].fullmatch(rel)
             and rel.endswith(".py")
         ):
             _py_compiles(rel, src, errs)
 
-    if surface.hooks_file is not None and surface.hooks_file in tree:
+    if not surface.editable_globs and surface.hooks_file is not None and surface.hooks_file in tree:
         check_hooks(surface, tree[surface.hooks_file], errs)
 
-    _check_script_refs(surface, tree, r, reserved_scripts, errs)
+    if not surface.editable_globs:
+        _check_script_refs(surface, tree, r, reserved_scripts, errs)
 
     if errs:
         raise ValueError(" | ".join(errs))

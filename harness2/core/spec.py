@@ -25,12 +25,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from .. import config
+from ..providers import Provider
 from .tree import SurfaceSpec
 
 ModelId = str
 
-CHANNELS = ("claude_cli", "opencode")
+CHANNELS = ("claude", "codex", "opencode", "human")
 
 
 @dataclass(frozen=True)
@@ -42,48 +42,14 @@ class ChannelSpec:
     effort: str = "high"
     steps: int = 120
     timeout: int = 3600
+    bin: str = ""
+    provider: Provider | None = None
 
     def __post_init__(self) -> None:
+        if self.kind == "claude_cli":
+            object.__setattr__(self, "kind", "claude")
         if self.kind not in CHANNELS:
             raise ValueError(f"unknown channel {self.kind!r}; expected one of {CHANNELS}")
-
-
-def resolve_channel_model(
-    kind: str | None,
-    model: str | None,
-    *,
-    effort: str = "high",
-    steps: int = 120,
-    timeout: int = 3600,
-) -> ChannelSpec:
-    """The one channel->model mapping; a lone override of either raises."""
-    use_default = kind is None and model is None
-    if (kind is None) != (model is None):
-        raise ValueError(
-            "channel and model must be overridden TOGETHER (a bare-id/provider-prefixed "
-            f"mismatch fails silently downstream); got kind={kind!r}, model={model!r}"
-        )
-    if kind is None:
-        kind = config.DEFAULT_PROPOSER_CHANNEL
-    if kind not in CHANNELS:
-        raise ValueError(f"unknown channel {kind!r}; expected one of {CHANNELS}")
-    if model is None:
-        model = config.PROPOSER_MODEL_BY_CHANNEL[kind]
-    if not model.strip():
-        if use_default:
-            return ChannelSpec(kind, "", effort=effort, steps=steps, timeout=timeout)
-        raise ValueError("model override must not be empty")
-    if kind == "opencode" and "/" not in model:
-        raise ValueError(
-            f"opencode channel needs a provider-prefixed model id "
-            f"in HARNESS2_IMPROVER_MODEL or HARNESS2_SOLVER_MODEL, got {model!r}"
-        )
-    if kind == "claude_cli" and "/" in model:
-        raise ValueError(
-            f"claude_cli channel takes a bare Anthropic id "
-            f"(e.g. {config.PROPOSER_MODEL_BY_CHANNEL['claude_cli']!r}), got {model!r}"
-        )
-    return ChannelSpec(kind, model, effort=effort, steps=steps, timeout=timeout)
 
 
 @dataclass(frozen=True)
@@ -126,7 +92,14 @@ class BenchPrompts:
                     )
 
 
-INSTALL_MODES = ("workspace_agents_md", "home_dir_jinja", "workspace_config", "codex_root")
+INSTALL_MODES = (
+    "workspace_agents_md",
+    "home_dir_jinja",
+    "workspace_config",
+    "codex_root",
+    "claude_root",
+    "command_files",
+)
 
 
 @dataclass(frozen=True)
@@ -271,7 +244,6 @@ __all__ = [
     "RunView",
     "ModelId",
     "resolve_prompts",
-    "resolve_channel_model",
     "CHANNELS",
     "INSTALL_MODES",
 ]

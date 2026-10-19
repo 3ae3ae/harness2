@@ -1,0 +1,46 @@
+# Copyright 2026 The Harness2 Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "harness2-benchmarks"
+version = "0.1.0"
+description = "The Harness² paper benchmarks (JobBench, LAB, WorkBuddy-Bench) as harness2 suites"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12,<3.14"
+dependencies = ["harness2-cli"]
+
+[project.optional-dependencies]
+render = ["openpyxl>=3.1,<4", "python-pptx>=1,<2"]
+
+[project.entry-points."harness2.suites"]
+jb = "harness2_benchmarks.suites.jb"
+lab = "harness2_benchmarks.suites.lab"
+wb-office = "harness2_benchmarks.suites.wb_office"
+wb-web = "harness2_benchmarks.suites.wb_web"
+wb-code = "harness2_benchmarks.suites.wb_code"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+include = ["harness2_benchmarks*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+harness2_benchmarks = ["third_party/**/*", "dependencies_meta/**/*"]

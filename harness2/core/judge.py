@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
 
+from . import runmark
 from .spec import BenchmarkAdapter
 
 
@@ -120,7 +121,7 @@ def judge_selections(
                     sel["k"],
                     sel["chosen_label"],
                     sel.get("chosen_run_id", ""),
-                    Path(rd),
+                    runmark.resolve_path(rd, adapter.spec.runs_root),
                     chosen_is_base=bool(sel.get("chosen_is_base")),
                 )
             ] = sel

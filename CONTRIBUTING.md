@@ -1,33 +1,49 @@
-# How to contribute
+# Contributing
 
-We'd love to accept your patches and contributions to this project.
+Issues and pull requests are welcome. Harness² CLI is an independent fork of
+[google-research/harness2](https://github.com/google-research/harness2); changes here are
+not sent upstream. Every pull request runs the tests and ruff in CI, and notable changes go
+in [CHANGELOG.md](CHANGELOG.md) under "Unreleased".
 
-## Before you begin
+## Development setup
 
-### Sign our Contributor License Agreement
+```bash
+uv venv --python 3.12 .venv
+source .venv/bin/activate
+uv pip install -e . -e plugins/harness2-benchmarks
+python -B -m unittest discover -s tests
+python -B -m unittest discover -s plugins/harness2-benchmarks/tests
+ruff check harness2 tests plugins && ruff format --check harness2 tests plugins
+```
 
-Contributions to this project must be accompanied by a
-[Contributor License Agreement](https://cla.developers.google.com/about) (CLA).
-You (or your employer) retain the copyright to your contribution; this simply
-gives us permission to use and redistribute your contributions as part of the
-project.
+The tests run offline: they use the deterministic demo adapter and small fake `claude` /
+`codex` executables, never a real model. `harness2 demo` exercises the whole method locally
+in a few seconds.
 
-If you or your current employer have already signed the Google CLA (even if it
-was for a different project), you probably don't need to do it again.
+## Layout
 
-Visit <https://cla.developers.google.com/> to see your current agreements or to
-sign a new one.
+| Path | Contents |
+|---|---|
+| `harness2/core/` | The method: recursion modes, prompts, evidence, selection, library, scheduler, events |
+| `harness2/substrate/` | Executors (Claude Code, Codex, OpenCode, command): editable surfaces, native harness import/export, trajectory renderers |
+| `harness2/suite.py`, `harness2/workspace.py` | The built-in `tasks` suite: tasks from `.harness2/tasks/`, rollouts in git worktrees or scratch directories |
+| `harness2/settings.py`, `harness2/providers.py`, `harness2/registry.py` | Layered settings, provider profiles, suite discovery |
+| `harness2/cli/` | The `harness2` command, one module per subcommand |
+| `plugins/harness2-benchmarks/` | The paper's benchmarks as a separate distribution |
+| `docs/` | User documentation |
 
-### Review our community guidelines
+A new suite is a module exposing `make_adapter(ctx)` (returning a
+`harness2.core.spec.BenchmarkAdapter`) and, optionally, `check(ctx)`, `setup(argv)` and
+`DESCRIPTION`, registered under the `harness2.suites` entry-point group. The benchmarks plugin
+is a complete example.
 
-This project follows
-[Google's Open Source Community Guidelines](https://opensource.google/conduct/).
+## Conventions
 
-## Contribution process
-
-### Code reviews
-
-All submissions, including submissions by project members, require review. We
-use GitHub pull requests for this purpose. Consult
-[GitHub Help](https://help.github.com/articles/about-pull-requests/) for more
-information on using pull requests.
+- Keep changes small, and reuse what is already there before adding code. Prefer the
+  standard library; the core package has no runtime dependencies.
+- New behaviour comes with an offline test.
+- Text that a model reads (prompts in `harness2/core/prompts.py`, suite prompt profiles) is
+  part of the method: change it deliberately, and say why in the pull request.
+- Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/)
+  (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`).
+- Run the tests and `ruff` before opening a pull request, and describe how you tested.

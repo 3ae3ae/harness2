@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""CodexSubstrate: codex-cli (config.CODEX_VERSION) as a solver substrate.
+"""CodexSubstrate: codex-cli as a solver substrate.
 
 Carries the c1..c8 surface (CODEX_SURFACE), the one install mode (codex_root: AGENTS.md,
-.agents, scripts and .codex copied to the workspace root, where `codex exec -C <ws>` finds
+.agents and .codex copied to the workspace root, where `codex exec -C <ws>` finds
 them), the `codex exec` flag contract, and the codex thread-item trajectory renderer.
 Per-deployment differences are values in Install.extras, never subclasses.
 """
@@ -23,17 +23,16 @@ Per-deployment differences are values in Install.extras, never subclasses.
 from __future__ import annotations
 
 import json
-import os
 import shutil
-import socket
 import tempfile
 from pathlib import Path
 from typing import Mapping
 
-from .. import config
+from .. import providers
 from ..core import runmark as RM
 from ..core import tree as HT
 from ..core.tree import SurfaceSpec
+from ._native import check_cli, cli_argv, export_files, native_tree, surface_files
 from .base import Install, Launcher, RunRequest
 
 CODEX_SURFACE = SurfaceSpec(
@@ -72,11 +71,12 @@ CODEX_SURFACE = SurfaceSpec(
     ),
     compile_skill_scripts=True,
     reject_empty_always_on=True,
+    script_dir=".agents/scripts",
     stubs=(
         (
-            "scripts/README.md",
-            "<!-- c7: deterministic helpers, run as `python3 scripts/<name>.py`. "
-            "Add one by emitting scripts/<name>.py. -->\n",
+            ".agents/scripts/README.md",
+            "<!-- c7: deterministic helpers, run as `python3 .agents/scripts/<name>.py`. "
+            "Add one by emitting .agents/scripts/<name>.py. -->\n",
         ),
         (
             "sub_agents/README.md",
@@ -103,16 +103,19 @@ CODEX_SURFACE = SurfaceSpec(
 )
 
 
-CODEX_ROOT_ENTRIES = ("AGENTS.md", ".agents", "scripts", ".codex")
+CODEX_ROOT_ENTRIES = ("AGENTS.md", ".agents", ".codex")
+NATIVE_PATHS = ("AGENTS.md", ".agents/skills", ".agents/scripts", ".codex/hooks.json")
 
 
 class CodexSubstrate:
     """codex-cli behind the one Substrate interface."""
 
     name = "cx"
+    NATIVE_PATHS = NATIVE_PATHS
 
-    def __init__(self, launcher: Launcher | None = None):
+    def __init__(self, launcher: Launcher | None = None, *, bin: str = ""):
         self._launcher = launcher
+        self.bin = bin
 
     def surface(self) -> SurfaceSpec:
         return CODEX_SURFACE
@@ -129,14 +132,11 @@ class CodexSubstrate:
         if not HT.is_tree(CODEX_SURFACE, tree_dir):
             raise ValueError(f"{tree_dir} is not a codex harness tree (no AGENTS.md)")
         staged = Path(tempfile.mkdtemp(prefix="adapt-cx-root-"))
-        for entry in CODEX_ROOT_ENTRIES:
-            src = tree_dir / entry
-            if not src.exists():
-                continue
-            if src.is_dir():
-                shutil.copytree(src, staged / entry)
-            else:
-                shutil.copy2(src, staged / entry)
+        try:
+            self.export_tree(HT.read_tree(CODEX_SURFACE, tree_dir), staged, base={})
+        except BaseException:
+            shutil.rmtree(staged, ignore_errors=True)
+            raise
         return Install(
             staging_dir=staged,
             fingerprint=RM.fingerprint(tree_dir),
@@ -147,7 +147,13 @@ class CodexSubstrate:
         )
 
     def exec_argv(
-        self, prompt: str, workspace: Path, model: str, *, reasoning_effort: str = "high"
+        self,
+        prompt: str,
+        workspace: Path,
+        model: str,
+        *,
+        reasoning_effort: str = "high",
+        bin: str = "",
     ) -> list[str]:
         """The reference `codex exec` argv; the real launchers build their own.
 
@@ -155,7 +161,7 @@ class CodexSubstrate:
         Callers use stdin=DEVNULL and `exec_env`.
         """
         return [
-            str(Path(config.CODEX_DIST) / "codex"),
+            *cli_argv(bin or self.bin, "codex"),
             "exec",
             prompt,
             "--model",
@@ -173,16 +179,86 @@ class CodexSubstrate:
             str(workspace),
         ]
 
-    def exec_env(self, base_env: Mapping[str, str], *, codex_home: Path) -> dict[str, str]:
+    def exec_env(
+        self, base_env: Mapping[str, str], *, codex_home: Path, bin: str = ""
+    ) -> dict[str, str]:
         """The reference `codex exec` environment; the real launchers build their own.
 
         The custom provider comes from CODEX_HOME, not a global OpenAI URL override.
         """
-        env = dict(base_env)
-        env.pop("OPENAI_BASE_URL", None)
-        env["CODEX_HOME"] = str(codex_home)
-        env["PATH"] = str(Path(config.CODEX_DIST) / "codex-path") + os.pathsep + env.get("PATH", "")
-        return env
+        return self.env(base_env, codex_home)
+
+    def import_tree(self, root: Path, *, rejected: list[str] | None = None) -> HT.Tree:
+        return native_tree(CODEX_SURFACE, root, NATIVE_PATHS, rejected)
+
+    def export_tree(self, tree: HT.Tree, root: Path, *, base: HT.Tree) -> dict[str, list[str]]:
+        files = {
+            k: v
+            for k, v in surface_files(CODEX_SURFACE, tree).items()
+            if not k.startswith("sub_agents/")
+        }
+        old = {
+            k: v
+            for k, v in surface_files(CODEX_SURFACE, base).items()
+            if not k.startswith("sub_agents/")
+        }
+        return export_files(root, files, old)
+
+    def strip_native(self, workspace: Path) -> None:
+        self.export_tree({}, workspace, base=self.import_tree(workspace))
+
+    def install_into(self, install: Install, workspace: Path) -> None:
+        self.export_tree(self.import_tree(install.staging_dir), workspace, base={})
+
+    def argv(
+        self,
+        prompt_file: Path,
+        workspace: Path,
+        model: str,
+        effort: str,
+        *,
+        provider: providers.Provider | None = None,
+    ) -> list[str]:
+        return [
+            *cli_argv(self.bin, "codex"),
+            "exec",
+            "--json",
+            "--skip-git-repo-check",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--dangerously-bypass-hook-trust",
+            "--ephemeral",
+            *providers.codex_args(provider, model, effort),
+            "-C",
+            str(workspace),
+            "-",
+        ]
+
+    def write_home(self, home: Path, provider: providers.Provider, model: str, effort: str) -> None:
+        content = providers.codex_config(provider, model, effort)
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "config.toml").write_text(content, encoding="utf-8")
+
+    def env(
+        self,
+        base_env: Mapping[str, str],
+        home: Path | None,
+        *,
+        provider: providers.Provider | None = None,
+    ) -> dict[str, str]:
+        stripped = providers.STRIP_ENV
+        if provider is not None and provider.type == "chatgpt-login":
+            stripped += ("OPENAI_API_KEY", "CODEX_API_KEY")
+            home = providers.codex_login_home(provider)
+        return {
+            **{k: v for k, v in base_env.items() if k not in stripped},
+            **({"CODEX_HOME": str(home)} if home is not None else {}),
+        }
+
+    def final_message(self, stream_path: Path) -> str:
+        return final_message(stream_path)
+
+    def cost_usd(self, stream_path: Path) -> float:
+        return 0.0
 
     def execute(
         self, task_ref: str, install: Install, run_ids: list[str], timeout: int
@@ -204,28 +280,8 @@ class CodexSubstrate:
             Path(stream_path), obs_trunc=obs_trunc, max_chars=max_chars, args_trunc=args_trunc
         )
 
-    def preflight(self, *, require_dist: bool = False, require_bridge: bool = False) -> None:
-        """Check the CLI and Responses endpoint, including container configuration."""
-        from urllib.parse import urlparse
-
-        config.require("HARNESS2_CODEX_BASE_URL", needed_by="Codex Responses endpoint")
-        config.require("HARNESS2_CODEX_API_KEY", needed_by="Codex endpoint authentication")
-        url = urlparse(config.CODEX_BASE_URL)
-        if url.scheme not in ("http", "https") or not url.hostname:
-            raise config.ConfigError("HARNESS2_CODEX_BASE_URL must be an HTTP(S) URL")
-        binary = Path(config.CODEX_DIST) / "codex"
-        if not binary.is_file():
-            raise RuntimeError(
-                "Codex is not installed; run scripts/setup_benchmark.py with --substrate cx"
-            )
-        if require_bridge and not config.CODEX_CONTAINER_URL:
-            raise RuntimeError(
-                "Set HARNESS2_CODEX_CONTAINER_URL to a container-accessible Responses endpoint"
-            )
-        with socket.create_connection(
-            (url.hostname, url.port or (443 if url.scheme == "https" else 80)), timeout=5
-        ):
-            pass
+    def preflight(self) -> None:
+        check_cli(self.bin, "codex")
 
 
 _TRUNC_FMT = "…(+{n} chars — render truncation)"
@@ -268,7 +324,12 @@ def parse_items(path: Path) -> list[dict]:
         raw = Path(path).read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         return [{"type": "_read_error", "message": str(e)}]
-    raw = raw.replace("\x00", "")
+    return parse_items_text(raw)
+
+
+def parse_items_text(text: str) -> list[dict]:
+    """Parse an exec JSONL string, keeping the last state of each thread item."""
+    raw = text.replace("\x00", "")
 
     events: list[dict] = []
     by_id: dict[str, int] = {}

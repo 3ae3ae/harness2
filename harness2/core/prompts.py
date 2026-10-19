@@ -22,7 +22,7 @@ block selected by the SurfaceSpec's name. No prompt here names a rubric, a score
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .spec import BenchPrompts
 from .tree import SurfaceSpec
@@ -204,7 +204,7 @@ The harness is a tree of components. Each has a different runtime cost and a dif
 | `.agents/skills/<name>/SKILL.md` | a reusable workflow | name+description advertised; the BODY is read ON DEMAND |
 | `.agents/skills/<name>/scripts/*` | a helper carried with its skill | run via bash |
 | `sub_agents/<name>/AGENT.md` | a delegated agent role | spawned in its OWN context, returns text |
-| `scripts/<name>.py` | a deterministic helper | run on demand via bash |
+| `.agents/scripts/<name>.py` | a deterministic helper | run on demand via bash |
 | `.codex/hooks.json` | lifecycle hooks | fire INSIDE the tool loop, on every matching tool call |
 
 The three that are easy to get wrong:
@@ -229,7 +229,8 @@ receiving the event as JSON on stdin (`tool_name`, `tool_input`; PostToolUse add
 "reason" sends that reason back to the model; `PreToolUse` can deny a call the same way.
 The only component that acts in the tool loop rather than in the prompt -- the only
 way to enforce something the model cannot skip. Prose can be stopped reading; a hook cannot.
-Keep commands fast and non-interactive; put real logic in a `scripts/` helper the hook calls.
+Keep commands fast and non-interactive; put real logic in a `.agents/scripts/` helper the hook
+calls.
 
 Change only what a trajectory shows needs changing -- but WHERE you change something, the FORM
 matters as much as the content, and the cheap form is not the obvious one.
@@ -352,10 +353,9 @@ earliest observed divergence, and match each failure to the cheapest effective c
 
 - TOOL ERROR: distinguish bad input from timeout, missing capability, permission, or unread output.
   Give one bounded fallback and stop condition; never prescribe blind repetition.
-- MECHANICAL REPETITION: use `scripts/<name>.py` for repeated deterministic extraction,
+- MECHANICAL REPETITION: use __SCRIPT_LEVER__ for repeated deterministic extraction,
   conversion or checking, with clear inputs, outputs and failure behavior.
-- TRIGGERED WORKFLOW: use an on-demand skill for a narrow multi-step procedure, name its trigger
-  in always-on text, and carry any helper it requires.
+- TRIGGERED WORKFLOW: __SKILL_LEVER__
 - IGNORED INVARIANT: only repeated evidence that clear prose is skipped can justify a defensive
   __LOOP_LEVER__. It must not block valid completion.
 - ORDINARY SEQUENCING: prefer concise always-on guidance. Do not add code for a one-off mistake
@@ -476,7 +476,7 @@ your work is used, however good it is.
 | `.agents/skills/<name>/SKILL.md` | c6 reusable workflow | name+description advertised; the BODY is read ON DEMAND |
 | `.agents/skills/<name>/scripts/*` | helper carried with its skill | run via Bash |
 | `sub_agents/<name>/AGENT.md` | c5 delegated agent role | spawned in its OWN context, returns text |
-| `scripts/<name>.py` | c7 deterministic helper | run ON DEMAND via Bash as `python scripts/<name>.py` |
+| `.agents/scripts/<name>.py` | c7 deterministic helper | run ON DEMAND via Bash as `python .agents/scripts/<name>.py` |
 | `.codex/hooks.json` | c8 lifecycle hooks | fire INSIDE the tool loop, on every matching tool call |
 
 ## The two on-demand levers that are easy to get wrong
@@ -494,8 +494,8 @@ as "Bash" plus a "hooks" list of "command"-type entries. Each hook is a shell co
 the event as JSON on stdin; a `PostToolUse` command printing a JSON "decision" of "block" with
 a "reason" sends that reason back to the model. Unlike everything else here it acts in the tool
 loop rather than in the prompt, which is the only way to enforce something the model cannot
-skip. Keep commands fast and non-interactive; put real logic in a `scripts/` helper the hook
-calls.
+skip. Keep commands fast and non-interactive; put real logic in a `.agents/scripts/` helper
+the hook calls.
 
 Both levers are rare in the harnesses adopted so far. Read that as a gap in what has been tried,
 not as a verdict -- but still add one only where a trajectory shows the failure it would fix.
@@ -508,7 +508,7 @@ Hard rules, each one learned from a previous failure:
   one is a harness that does not exist.
 - A skill's literal directory name must appear in `AGENTS.md` as a trigger, or the skill is
   never opened. Scripts run via Bash.
-- `scripts/*.py` filenames must be snake_case and must compile under py_compile.
+- `.agents/scripts/*.py` filenames must be snake_case and must compile under py_compile.
 - Never write `harness.yaml` or other runtime-owned files: they are not on the editable
   surface."""
 
@@ -516,7 +516,7 @@ Hard rules, each one learned from a previous failure:
 _TTS_INV = """\
 # YOUR DIMENSION: INVARIANT -- how the agent works, independent of the subject
 
-You own the machinery: tool guidance, `scripts/*.py`, `sub_agents/*/AGENT.md`, the tool-loop
+You own the machinery: tool guidance, `__SCRIPT_DIR__/*.py`, `sub_agents/*/AGENT.md`, the tool-loop
 lever, and SHORT imperative always-on rules that hold for essentially EVERY task in this
 {domain} (output discipline, verification order, format mechanics, budget and finalization).
 
@@ -526,7 +526,7 @@ changes, it belongs to them, not you.
 
 Pick the cheapest mechanism that fixes what the trajectory shows:
 - the model fumbled a format or a library repeatedly  -> a tool-guidance note, or a small
-  deterministic `scripts/*.py` helper it can call instead of improvising
+  deterministic `__SCRIPT_DIR__/*.py` helper it can call instead of improvising
 - a required step is skipped under time pressure      -> ONE always-on rule, stated in an
   imperative line (every token here competes with the {deliverable} -- if you add, cut)
 - a bounded sub-task drowned the context and returned
@@ -604,6 +604,132 @@ and you cite it in your notes. If you cannot name the moment, the edit is specul
 context for nothing."""
 
 
+_SURFACE_CLAUDE_HEAD = """\
+# WHAT YOU CAN CHANGE
+
+The harness is a tree of components. Each has a different runtime cost and a different reach:
+
+| path | what it is | when it is in context |
+|---|---|---|
+| `CLAUDE.md` | role, procedure, rules, durable facts | ALWAYS ON -- loaded whole into every session; every token competes with the agent's own work |
+| `.claude/skills/<name>/SKILL.md` | a reusable workflow | name+description always listed; the BODY is read ON DEMAND when the agent invokes the skill |
+| `.claude/skills/<name>/scripts/*` | a helper carried with its skill | run via Bash |
+| `sub_agents/<name>/AGENT.md` | a delegated subagent, installed as `.claude/agents/<name>.md` | runs in its OWN context, returns text |
+| `.claude/scripts/<name>.py` | a deterministic helper | run on demand via Bash |
+| `.claude/hooks.json` | lifecycle hooks, installed into `.claude/settings.json` | fire INSIDE the tool loop, on every matching event |
+
+The three that are easy to get wrong:
+
+`.claude/skills/` -- YAML frontmatter with a `description:` is REQUIRED; a `name:` line is
+optional and must match the directory. Only the name and description are shown up front, and
+the agent decides from the description alone whether to open the skill -- so the description IS
+the trigger: name the situation the skill handles, precisely and narrowly. If a skill calls a
+helper, the helper must travel with it.
+
+`sub_agents/` -- frontmatter needs a `description:` saying when to delegate; an optional
+`tools:` line (comma-separated tool names) narrows what it may use. It sees only what its own
+file and the delegation message say, never the main conversation, and returns text. Worth it
+for exactly one shape of problem: a bounded sub-task whose INPUT is large and whose ANSWER is
+small. A bad trade when the output is as big as the input.
+
+`.claude/hooks.json` -- ONE JSON file: a top-level "hooks" object maps an event --
+`PreToolUse`, `PostToolUse`, `Stop`, `SessionStart` -- to matcher entries (a "matcher" such as
+"Bash" or "Edit|Write", plus a "hooks" list of "command"-type entries). Each hook is a shell
+command receiving the event as JSON on stdin (`tool_name`, `tool_input`; PostToolUse adds
+`tool_response`). A command that exits with status 2 blocks the step and its stderr is shown to
+the model: a `PreToolUse` hook refuses the call, a `PostToolUse` hook reports a problem with
+what just happened, a `Stop` hook sends the agent back to work. The only component that acts in
+the tool loop rather than in the prompt -- the only way to enforce something the model cannot
+skip. Prose can be stopped reading; a hook cannot. Keep commands fast and non-interactive; put
+real logic in a `.claude/scripts/` helper the hook calls."""
+
+
+_SURFACE_CLAUDE_PREFER = """\
+So prefer, in this order:
+  - a SKILL for anything with a recognisable trigger -- a procedure for one kind of change or
+    document, a recurring situation, a tool the work keeps needing. This is the default form
+    for new instruction.
+  - a SCRIPT for a deterministic operation the runs hand-rolled and got wrong, or did slowly.
+  - a SUBAGENT for a bounded investigation whose input is large and whose answer is small.
+  - a HOOK when a recurring, mechanical problem in the tool loop is better handled there than
+    in prose. It acts inside the loop, so it cannot be ignored AND it costs nothing in always-on
+    budget -- which makes it the cheap way to carry knowledge that prose would have to repeat.
+    The recurring shapes: running a fast check after an edit and reporting what broke; blocking
+    a known-bad command with a reason that teaches the fix; and refusing to stop while a
+    required step is still missing.
+  - ALWAYS-ON TEXT last, and only for a short rule that genuinely applies to every run. If you
+    add always-on text, cut something else to pay for it.
+
+EVERY SCRIPT YOU NAME MUST EXIST. A `.claude/scripts/<file>.py` invoked from `CLAUDE.md`, a
+skill or a hook must ship in the same proposal, and a skill's own helper goes at
+`.claude/skills/<skill-name>/scripts/<file>.py`. A helper placed directly in the skill
+directory is OFF THE EDITABLE SURFACE and silently dropped, leaving the skill invoking a file
+that does not exist. Never write `.claude/settings.json` or `.claude/agents/` directly: the
+runner builds them from `.claude/hooks.json` and `sub_agents/`."""
+
+
+_TTS_SURFACE_HEAD_CLAUDE = """\
+# EDITABLE HARNESS SURFACE
+
+You may write ONLY these paths. Anything else is off the editable surface: it is dropped before
+your work is used, however good it is.
+
+| path | component | when it is in context |
+|---|---|---|
+| `CLAUDE.md` | c1/c3/c4/c6 persona, rules, durable facts, tool prose | ALWAYS ON -- loaded whole into every session |
+| `.claude/skills/<name>/SKILL.md` | c6 reusable workflow | name+description listed; the BODY is read ON DEMAND |
+| `.claude/skills/<name>/scripts/*` | helper carried with its skill | run via Bash |
+| `sub_agents/<name>/AGENT.md` | c5 delegated subagent | run ON DEMAND in its OWN context, returns text |
+| `.claude/scripts/<name>.py` | c7 deterministic helper | run ON DEMAND via Bash as `python3 .claude/scripts/<name>.py` |
+| `.claude/hooks.json` | c8 lifecycle hooks | fire INSIDE the tool loop, on every matching event |
+
+## The two on-demand levers that are easy to get wrong
+
+`sub_agents/<name>/AGENT.md` -- frontmatter needs a `description:` saying when to delegate. It
+runs in a SEPARATE context: it sees only what its own file and the delegation message say,
+never the main conversation, and it returns text. Worth it for exactly one shape of problem --
+a bounded sub-task whose inputs are large and whose ANSWER is small. A bad trade when the
+output is as big as the input.
+
+`.claude/hooks.json` -- ONE JSON file: a top-level "hooks" object maps an event (`PreToolUse`,
+`PostToolUse`, `Stop`, `SessionStart`) to matcher entries -- a "matcher" such as "Bash" plus a
+"hooks" list of "command"-type entries. Each hook is a shell command receiving the event as
+JSON on stdin; one that exits with status 2 blocks the step and shows its stderr to the model.
+Unlike everything else here it acts in the tool loop rather than in the prompt, which is the
+only way to enforce something the model cannot skip. Keep commands fast and non-interactive;
+put real logic in a `.claude/scripts/` helper the hook calls.
+
+Both levers are rare in the harnesses adopted so far. Read that as a gap in what has been tried,
+not as a verdict -- but still add one only where a trajectory shows the failure it would fix.
+
+Hard rules, each one learned from a previous failure:
+- The single most common failure of this harness family is producing NO deliverable because the
+  model exhausted its budget on reasoning. Always-on prose makes that WORSE. Prefer an
+  on-demand skill over new always-on prose; if you add always-on text, cut something else --
+  `CLAUDE.md` is capped.
+- A skill's description is its trigger: the agent opens a skill only when the description
+  matches the situation in front of it. Scripts run via Bash.
+- `.claude/scripts/*.py` filenames must be snake_case and must compile under py_compile."""
+
+
+_SURFACE_COMMAND_HEAD = """\
+# WHAT YOU CAN CHANGE
+
+The harness is the set of files in `context/harness/`: whatever the agent being tuned reads at
+run time -- prompt text, configuration, helper code. These path patterns are the whole editable
+surface:
+
+__EDITABLE__
+
+A file you create counts only if its path matches one of those patterns; anything else is
+dropped before your work is used, however good it is. Where other parts of these instructions
+name skills, scripts, subagents or hooks, those levers exist here only as files the patterns
+allow.
+
+Change only what a trajectory shows needs changing. Text the agent reads on every run is paid
+for on every run, competing with the agent's own work: if you add some, cut something else."""
+
+
 @dataclass(frozen=True)
 class _SurfaceText:
     """The per-substrate prompt fragments, resolved once at module load."""
@@ -612,6 +738,20 @@ class _SurfaceText:
     inv: str
     dom: str
     tts_surface: str
+    script_dir: str = "scripts"
+
+
+def _levers(template: str, **values: str) -> str:
+    """Fill the `__NAME__` slots of a shared INV/DOM template for one surface."""
+    for name, value in values.items():
+        template = template.replace(f"__{name.upper()}__", value)
+    return template
+
+
+_SKILL_TRIGGER_LEVER = (
+    "use an on-demand skill for a narrow multi-step procedure, name its trigger\n"
+    "  in always-on text, and carry any helper it requires."
+)
 
 
 def _build_surface_texts() -> dict[str, _SurfaceText]:
@@ -629,34 +769,91 @@ def _build_surface_texts() -> dict[str, _SurfaceText]:
             _surface_part(_SURFACE_CODEX, "# HOW TO MAKE A CHANGE"),
         ]
     )
+    shape_and_how = _surface_part(_SURFACE_CODEX, "THE DELIVERABLE'S SHAPE")
+    claude_md = "\n\n".join(
+        [
+            _SURFACE_CLAUDE_HEAD,
+            _surface_part(_SURFACE_CODEX, "Change only what a trajectory", "So prefer, in this"),
+            _SURFACE_CLAUDE_PREFER,
+            shape_and_how,
+        ]
+    )
+    claude_tts = "\n\n".join(
+        [
+            _TTS_SURFACE_HEAD_CLAUDE,
+            _surface_part(claude_md, "EVERY SCRIPT YOU NAME", "THE DELIVERABLE'S SHAPE"),
+            _surface_part(claude_md, "# HOW TO MAKE A CHANGE"),
+        ]
+    )
+    command_md = "\n\n".join([_SURFACE_COMMAND_HEAD, shape_and_how])
     return {
         "opencode": _SurfaceText(
             surface_md=_SURFACE_OPENCODE,
-            inv=_INV_TEMPLATE.replace(
-                "__LOOP_LEVER__",
-                "`plugin/<name>.ts` hook -- for example, preventing exit before a "
+            inv=_levers(
+                _INV_TEMPLATE,
+                script_lever="`scripts/<name>.py`",
+                skill_lever=_SKILL_TRIGGER_LEVER,
+                loop_lever="`plugin/<name>.ts` hook -- for example, preventing exit before a "
                 "{deliverable} exists",
             ),
-            dom=_DOM_TEMPLATE.replace(
-                "__TRIGGER_SENTENCE__",
-                "A skill exists only once its name appears in the always-on text: write that "
-                "trigger line in the same edit.",
+            dom=_levers(
+                _DOM_TEMPLATE,
+                trigger_sentence="A skill exists only once its name appears in the always-on "
+                "text: write that trigger line in the same edit.",
             ),
             tts_surface=oc_tts,
         ),
         "codex": _SurfaceText(
             surface_md=_SURFACE_CODEX,
-            inv=_INV_TEMPLATE.replace(
-                "__LOOP_LEVER__",
-                "hook in `.codex/hooks.json` -- for example, blocking a finish before a "
-                "{deliverable} exists, with a corrective reason",
+            inv=_levers(
+                _INV_TEMPLATE,
+                script_lever="`.agents/scripts/<name>.py`",
+                skill_lever=_SKILL_TRIGGER_LEVER,
+                loop_lever="hook in `.codex/hooks.json` -- for example, blocking a finish before "
+                "a {deliverable} exists, with a corrective reason",
             ),
-            dom=_DOM_TEMPLATE.replace(
-                "__TRIGGER_SENTENCE__",
-                "A skill exists only once its name appears in `AGENTS.md` as a trigger: write "
-                "that trigger line in the same edit.",
+            dom=_levers(
+                _DOM_TEMPLATE,
+                trigger_sentence="A skill exists only once its name appears in `AGENTS.md` as a "
+                "trigger: write that trigger line in the same edit.",
             ),
             tts_surface=cx_tts,
+            script_dir=".agents/scripts",
+        ),
+        "claude": _SurfaceText(
+            surface_md=claude_md,
+            inv=_levers(
+                _INV_TEMPLATE,
+                script_lever="`.claude/scripts/<name>.py`",
+                skill_lever="use an on-demand skill for a narrow multi-step procedure, write its\n"
+                "  description as its trigger, and carry any helper it requires.",
+                loop_lever="hook in `.claude/hooks.json` -- for example, a `Stop` hook that "
+                "refuses to finish before a {deliverable} exists, with a corrective reason",
+            ),
+            dom=_levers(
+                _DOM_TEMPLATE,
+                trigger_sentence="The agent finds a skill by its description alone: write the "
+                "description as the situation the skill handles.",
+            ),
+            tts_surface=claude_tts,
+            script_dir=".claude/scripts",
+        ),
+        "command": _SurfaceText(
+            surface_md=command_md,
+            inv=_levers(
+                _INV_TEMPLATE,
+                script_lever="a helper file, where the editable patterns allow one,",
+                skill_lever="keep a narrow multi-step procedure in a file the agent opens\n"
+                "  only when it applies, if the patterns allow one, and say in always-on text "
+                "when to open it.",
+                loop_lever="check in whatever runtime configuration the editable patterns include",
+            ),
+            dom=_levers(
+                _DOM_TEMPLATE,
+                trigger_sentence="Knowledge in a file the agent opens on demand is read only "
+                "when always-on text says when to open it: write that line in the same edit.",
+            ),
+            tts_surface=command_md,
         ),
     }
 
@@ -669,12 +866,21 @@ def _st(surface: SurfaceSpec | str) -> _SurfaceText:
     got = _SURFACE_TEXTS.get(name)
     if got is None:
         raise ValueError(f"no prompt surface for {name!r}; known: {sorted(_SURFACE_TEXTS)}")
+    globs = getattr(surface, "editable_globs", ())
+    if name == "command" and globs:
+        listing = "\n".join(f"- `{g}`" for g in globs)
+        got = replace(
+            got,
+            surface_md=got.surface_md.replace("__EDITABLE__", listing),
+            tts_surface=got.tts_surface.replace("__EDITABLE__", listing),
+        )
     return got
 
 
 def _tts_propose(bp: BenchPrompts, dim: str, st: _SurfaceText, *, k: int, index: int) -> str:
     """propose(), in the tts pack's words."""
-    block = (_TTS_INV if dim == "INV" else _TTS_DOM).format(
+    template = (_TTS_INV if dim == "INV" else _TTS_DOM).replace("__SCRIPT_DIR__", st.script_dir)
+    block = template.format(
         deliverable=bp.deliverable_word,
         domain=bp.domain_word,
         levers=(bp.inv_levers if dim == "INV" else bp.dom_levers).strip(),
@@ -1161,3 +1367,40 @@ def experience(bp: BenchPrompts) -> str:
             ]
         )
     )
+
+
+CONSOLIDATE_MISSION = """\
+You are consolidating an autonomous agent's harness for the project it works on.
+
+The agent has already been run on {n} task(s) from this project. For each task, its harness
+was refined on evidence from that task's own runs, and the best result was adopted. Those
+adopted harnesses are task-specific: each was shaped for one request. Your job is to compose
+ONE harness for the project's next tasks -- tasks nobody has seen yet.
+
+# YOUR EVIDENCE
+
+context/harness/                    the harness the runs started from -- edit THIS one
+context/tasks/<task>/task.md        the request each task made
+context/tasks/<task>/harness/       the harness adopted for that task
+context/tasks/<task>/EXPERIENCE.md  which edits made a difference and the lesson drawn, when
+                                    one was recorded
+context/INDEX.md                    the tasks, their domains, and which adopted harnesses
+                                    differ from the start
+
+Read INDEX.md, then compare each adopted harness with context/harness/ and read the lessons.
+
+# WHAT TO KEEP
+
+- A component or rule that helped on several tasks, or that a lesson supports as general,
+  belongs in the consolidated harness.
+- A workspace fact tied to one task -- a file it touched, a value it computed, a mapping it
+  verified -- does not. Keep the procedure that found it, if that procedure generalizes.
+- Where two tasks' edits conflict, keep the one with the stronger evidence, or neither.
+- When the adopted harnesses mostly left the start unchanged, so should you: an edit no task
+  supported costs context on every future run and buys nothing.
+- Knowledge that applies only in some situations belongs in an on-demand component, not in
+  always-on text. Keep always-on text short.
+
+{surface}
+
+In your `<notes>`, name for each change the tasks and lessons that support it."""
