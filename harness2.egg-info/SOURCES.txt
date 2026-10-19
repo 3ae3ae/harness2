@@ -43,10 +43,15 @@ harness2/core/selection.py
 harness2/core/spec.py
 harness2/core/tree.py
 harness2/substrate/__init__.py
+harness2/substrate/_native.py
 harness2/substrate/base.py
+harness2/substrate/claude.py
 harness2/substrate/codex.py
+harness2/substrate/command.py
 harness2/substrate/opencode.py
 scripts/render_readme_typing.py
+tests/test_bridge.py
+tests/test_executors.py
 tests/test_providers.py
 tests/test_registry.py
 tests/test_runtime.py

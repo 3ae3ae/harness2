@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Serve a Responses-API endpoint on Vertex AI for the Codex executor."""
+"""Serve a Responses-API endpoint for a configured provider/model."""
 
 from __future__ import annotations
 
@@ -24,19 +24,8 @@ import socket
 import sys
 from pathlib import Path
 
-from harness2 import config
-
-LITELLM_CONFIG = """model_list:
-  - model_name: {model}
-    litellm_params:
-      model: vertex_ai/{model}
-      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
-      vertex_location: os.environ/GOOGLE_CLOUD_LOCATION
-litellm_settings:
-  drop_params: true
-general_settings:
-  master_key: os.environ/HARNESS2_BRIDGE_KEY
-"""
+from harness2 import providers, settings
+from harness2.settings import ConfigError
 
 
 def _free_port(host: str) -> int:
@@ -46,7 +35,7 @@ def _free_port(host: str) -> int:
 
 
 def _endpoint(path: Path, host: str, port: int) -> dict:
-    """Reuse the saved port and key, so the Codex config written by setup stays valid."""
+    """Reuse the saved port and key across bridge invocations."""
     try:
         saved = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -63,43 +52,51 @@ def _endpoint(path: Path, host: str, port: int) -> dict:
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--model", default=config.SOLVER_MODEL_CX, help="Vertex model ID to serve")
-    p.add_argument(
-        "--host",
-        default="127.0.0.1",
-        help="interface to bind; use 0.0.0.0 so WorkBuddy containers can reach it",
-    )
-    p.add_argument("--port", type=int, default=0, help="default: the saved port, else a free one")
+    p.add_argument("--model", required=True)
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=0)
     args = p.parse_args(argv)
 
     litellm = Path(sys.executable).with_name("litellm")
     if not litellm.is_file():
-        p.exit(1, "LiteLLM is not installed; run: uv pip install -e '.[render,bridge]'\n")
-    if not config.VERTEX_PROJECT:
-        p.exit(1, "Set GOOGLE_CLOUD_PROJECT in .env\n")
+        p.exit(1, "LiteLLM is not installed; run: uv pip install -e '.[bridge]'\n")
+    try:
+        config = settings.load(settings.find_project(Path.cwd()))
+        provider_name, model = providers.split_model(args.model)
+        provider = config.provider(provider_name)
+        params = providers.litellm_params(provider, model)
+    except ConfigError as exc:
+        p.exit(1, f"{exc}\n")
 
-    root = config.DEPENDENCIES / "codex"
+    root = settings.cache_dir() / "bridge"
     endpoint = _endpoint(root / "bridge.json", args.host, args.port)
     port = endpoint["port"]
     litellm_config = root / "bridge.yaml"
-    litellm_config.write_text(LITELLM_CONFIG.format(model=args.model), encoding="utf-8")
+    # JSON is valid YAML and safely preserves arbitrary model and endpoint strings.
+    litellm_config.write_text(
+        json.dumps(
+            {
+                "model_list": [{"model_name": model, "litellm_params": params}],
+                "litellm_settings": {"drop_params": True},
+                "general_settings": {"master_key": "os.environ/HARNESS2_BRIDGE_KEY"},
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
-    settings = {
-        "HARNESS2_CODEX_BASE_URL": f"http://127.0.0.1:{port}/v1",
-        "HARNESS2_CODEX_API_KEY": endpoint["key"],
-        "HARNESS2_CODEX_MODEL": args.model,
-    }
-    if args.host != "127.0.0.1":
-        settings["HARNESS2_CODEX_CONTAINER_URL"] = f"http://host.docker.internal:{port}/v1"
-    print("Add these to .env, then run harness2-setup <bench> --substrate cx:")
-    print("\n".join(f"{name}={value}" for name, value in settings.items()), flush=True)
+    print("Provider configuration:")
+    print(
+        "[providers.bridge]\n"
+        'type = "openai"\n'
+        f'base_url = "http://127.0.0.1:{port}/v1"\n'
+        'api_key_env = "HARNESS2_BRIDGE_KEY"',
+    )
+    print("\nEnvironment:")
+    print(f"HARNESS2_BRIDGE_KEY={endpoint['key']}", flush=True)
 
-    env = {
-        **os.environ,
-        "HARNESS2_BRIDGE_KEY": endpoint["key"],
-        "GOOGLE_CLOUD_PROJECT": config.VERTEX_PROJECT,
-        "GOOGLE_CLOUD_LOCATION": config.VERTEX_REGION,
-    }
+    env = {**os.environ, "HARNESS2_BRIDGE_KEY": endpoint["key"]}
     command = [str(litellm), "--config", str(litellm_config), "--host", args.host]
     os.execve(str(litellm), [*command, "--port", str(port)], env)
 

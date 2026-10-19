@@ -14,7 +14,7 @@
 
 """OpencodeSubstrate: the OpenCode agent framework as a solver substrate.
 
-Carries the c1..c8 surface (OPENCODE_SURFACE), the three install modes, the bun-run CLI
+Carries the c1..c8 surface (OPENCODE_SURFACE), the three install modes, the CLI
 contract, and the one opencode event-stream trajectory renderer. The install modes are
 different delivery channels for the always-on text and are not interchangeable: changing the
 one a benchmark uses moves that benchmark's baseline.
@@ -33,10 +33,10 @@ import tempfile
 from pathlib import Path
 from typing import Mapping
 
-from .. import config
 from ..core import runmark as RM
 from ..core import tree as HT
 from ..core.tree import SurfaceSpec
+from ._native import check_cli, cli_argv
 from .base import Install, Launcher, RunRequest
 
 OPENCODE_SURFACE = SurfaceSpec(
@@ -175,8 +175,9 @@ class OpencodeSubstrate:
 
     name = "oc"
 
-    def __init__(self, launcher: Launcher | None = None):
+    def __init__(self, launcher: Launcher | None = None, *, bin: str = ""):
         self._launcher = launcher
+        self.bin = bin
 
     def surface(self) -> SurfaceSpec:
         return OPENCODE_SURFACE
@@ -233,19 +234,14 @@ class OpencodeSubstrate:
         variant: str | None = None,
         agent: str = "",
         session: str | None = None,
+        bin: str = "",
     ) -> list[str]:
         """The reference argv; the real launchers build their own.
 
-        The upstream checkout runs from source through bun: there is no `opencode` binary in
-        the contract. With `agent=""` the rendered AGENTS.md appends to the provider prompt.
+        With `agent=""` the rendered AGENTS.md appends to the provider prompt.
         """
         argv = [
-            str(config.BUN),
-            "run",
-            "--cwd",
-            str(config.OPENCODE_DIR / "packages" / "opencode"),
-            "--conditions=browser",
-            "src/index.ts",
+            *cli_argv(bin or self.bin, "opencode"),
             "run",
             prompt,
             "--dir",
@@ -305,19 +301,7 @@ class OpencodeSubstrate:
         )
 
     def preflight(self) -> None:
-        """Checks the OpenCode checkout and bun exist; starts nothing."""
-        oc = config.OPENCODE_DIR
-        if not (oc / "packages" / "opencode" / "src" / "index.ts").is_file():
-            raise RuntimeError(
-                f"OpenCode checkout missing at {oc} (no packages/opencode/src/index.ts): "
-                f"run scripts/setup_benchmark.py <benchmark> to fetch the pinned checkout "
-                f"at {config.DEPENDENCY_PINS['opencode'][:12]} (v1.14.18)."
-            )
-        if not config.BUN.is_file():
-            raise RuntimeError(
-                f"bun not found at {config.BUN}: install bun on PATH or at ~/.bun/bin/bun "
-                f"(the upstream OpenCode is run from source through bun)."
-            )
+        check_cli(self.bin, "opencode")
 
 
 _TRUNC_FMT = "…(+{n} chars — render truncation)"
