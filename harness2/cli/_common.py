@@ -173,7 +173,7 @@ def save_run(run_dir: Path, config: settings.Settings, stream: list, plan: dict)
     record = {
         "name": run_dir.name,
         "created": old["created"] if old else datetime.now(timezone.utc).isoformat(),
-        "harness2_version": version("harness2"),
+        "harness2_version": version("harness2-cli"),
         "suite": config.get("suite.name"),
         "executor": config.get("executor.name"),
         "settings": subset,

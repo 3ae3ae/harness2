@@ -177,9 +177,7 @@ def codex(*, require_bridge: bool = False) -> None:
         raise config.ConfigError("HARNESS2_CODEX_BASE_URL must be an HTTP(S) URL")
     binary = Path(config.CODEX_DIST) / "codex"
     if not binary.is_file():
-        raise RuntimeError(
-            "Codex is not installed; run harness2 setup <suite> --substrate cx"
-        )
+        raise RuntimeError("Codex is not installed; run harness2 setup <suite> --substrate cx")
     if require_bridge and not config.CODEX_CONTAINER_URL:
         raise RuntimeError(
             "Set HARNESS2_CODEX_CONTAINER_URL to a container-accessible Responses endpoint"

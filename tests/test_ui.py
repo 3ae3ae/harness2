@@ -132,7 +132,9 @@ class UiTests(unittest.TestCase):
         fake.chmod(0o755)
         project = self.root / "project"
         project.mkdir()
-        args = argparse.Namespace(project=str(project), yes=True, force=False, executor=None)
+        args = argparse.Namespace(
+            project=str(project), yes=True, force=False, executor=None, auth=None
+        )
         env = {
             "PATH": f"{bin_dir}{os.pathsep}{os.defpath}",
             "XDG_CONFIG_HOME": str(self.root / "config"),
@@ -143,7 +145,7 @@ class UiTests(unittest.TestCase):
 
             loaded = settings.load(project)
             self.assertEqual(loaded.get("executor.name"), "claude")
-            self.assertEqual(loaded.get("improver.model"), "anthropic/claude-opus-5-5")
+            self.assertEqual(loaded.get("improver.model"), "claude-login/claude-opus-5-5")
             self.assertTrue((project / ".harness2/tasks").is_dir())
             self.assertIn("runs/", (project / ".harness2/.gitignore").read_text())
             with patch("sys.stderr"):
