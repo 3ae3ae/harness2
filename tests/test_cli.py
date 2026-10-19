@@ -20,6 +20,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -501,9 +502,10 @@ class CliTests(unittest.TestCase):
             for command in main.COMMANDS:
                 self.assertIn(":" + command, script)
             self.assertIn("--only-tasks", script)
-            result = subprocess.run(
-                ["/bin/" + shell, "-n"], input=script, text=True, capture_output=True
-            )
+            binary = shutil.which(shell)
+            if binary is None:  # e.g. no zsh on a Linux CI runner: only the text is checked
+                continue
+            result = subprocess.run([binary, "-n"], input=script, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             if shell == "bash":
                 probe = (
@@ -516,7 +518,7 @@ class CliTests(unittest.TestCase):
                     + script
                     + "\nwords=(harness2 run --on); CURRENT=3; _harness2_complete"
                 )
-            result = subprocess.run(["/bin/" + shell], input=probe, text=True, capture_output=True)
+            result = subprocess.run([binary], input=probe, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("--only-tasks", result.stdout)
         for executable, command in main.ALIASES.items():
