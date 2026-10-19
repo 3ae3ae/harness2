@@ -12,14 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The two solver substrates behind one interface (substrate/base.py).
-
-`OpencodeSubstrate` carries OPENCODE_SURFACE and three install modes; `CodexSubstrate`
-carries CODEX_SURFACE and one. Benchmark adapters supply the launcher body.
-"""
+"""Agent-framework and command executors behind the substrate interface."""
 
 from .base import Install, Launcher, RunRequest, Substrate
+from .claude import CLAUDE_SURFACE, ClaudeSubstrate
 from .codex import CODEX_SURFACE, CodexSubstrate
+from .command import CommandSubstrate
 from .opencode import OPENCODE_SURFACE, OpencodeSubstrate
 
 __all__ = [
@@ -31,4 +29,7 @@ __all__ = [
     "OPENCODE_SURFACE",
     "CodexSubstrate",
     "CODEX_SURFACE",
+    "ClaudeSubstrate",
+    "CLAUDE_SURFACE",
+    "CommandSubstrate",
 ]

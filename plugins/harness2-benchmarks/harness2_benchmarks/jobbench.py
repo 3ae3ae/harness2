@@ -818,6 +818,8 @@ class JobBenchAdapter:
         env = self.substrate.exec_env(os.environ, codex_home=codex_home)
         env.update(
             {
+                # the pinned Codex dist ships its helper binaries beside the CLI
+                "PATH": str(Path(config.CODEX_DIST) / "codex-path") + os.pathsep + env["PATH"],
                 "HARNESS2_CODEX_BIN": str(Path(config.CODEX_DIST) / "codex"),
                 "TASK_IDS": task_id,
                 "LABEL": label,
