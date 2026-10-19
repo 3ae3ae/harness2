@@ -72,7 +72,9 @@ uv tool install git+https://github.com/3ae3ae/harness2-cli
 # or: pipx install git+https://github.com/3ae3ae/harness2-cli
 ```
 
-By default runs use the CLI's own login, so a Claude or ChatGPT subscription is enough. You
+By default runs use your subscription, so a Claude or ChatGPT plan is enough: Claude Code
+runs on its own login, and Codex on a login kept for harness2 that you make once with
+`harness2 login codex`. You
 can use an API key or another provider instead; see [Configuration](#configuration). Runs
 make many model calls and use money or subscription quota: the [quick start](#quick-start)
 shows how to see the number of calls first and how to cap them.
@@ -138,6 +140,7 @@ harness2 guide --install claude
 | `harness2 judge` / `report` | Grade each task's adopted result, and summarise the grades |
 | `harness2 runs ls / show / rm` | List, inspect and delete runs |
 | `harness2 config show / get / set` | Read and change settings; `show --origin` says where each value comes from |
+| `harness2 login` | Check the subscription logins; `login codex` signs Codex in for harness2 |
 | `harness2 chat` | Talk to your agent CLI about tasks, runs and results |
 | `harness2 guide` | The guide for AI agents that use harness2 |
 | `harness2 demo` | A local run with scripted editors and no model calls |
@@ -161,7 +164,8 @@ channel = "claude"
 model = "claude-login/claude-opus-5-5"
 ```
 
-`chatgpt-login/<model>` uses your ChatGPT subscription through Codex. API keys and other
+`chatgpt-login/<model>` uses your ChatGPT subscription through Codex (after
+`harness2 login codex`). API keys and other
 endpoints work too: Anthropic, OpenAI, any OpenAI-compatible or Anthropic-compatible
 server, Vertex AI and Bedrock. To tune an agent other than Claude Code or Codex, the
 `command` executor runs your own command and edits the files you list.

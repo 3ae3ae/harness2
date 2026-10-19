@@ -195,6 +195,13 @@ rubric, or to explain a run's results.
 |---|---|
 | `--with {claude,codex}` | Which CLI to start. Default: the improver's channel, if installed. |
 
+### `login [codex]`
+
+Without an argument, show whether `claude-login` (Claude Code's own login) and
+`chatgpt-login` (the Codex login kept for harness2) are ready. `harness2 login codex` signs
+Codex in to ChatGPT for harness2, in its own home, apart from your `~/.codex`; `--device`
+uses a device code on machines without a browser.
+
 ### `guide`
 
 Print the guide for AI agents that drive harness2, followed by the current project's

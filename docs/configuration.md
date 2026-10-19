@@ -52,14 +52,26 @@ all you need:
 | Model | Runs on |
 |---|---|
 | `claude-login/<model>`, e.g. `claude-login/claude-sonnet-5-5` | your Claude subscription, through Claude Code's login (`claude auth login`) |
-| `chatgpt-login/<model>`, e.g. `chatgpt-login/gpt-6.1-sol` | your ChatGPT subscription, through Codex's login (`codex login`) |
+| `chatgpt-login/<model>`, e.g. `chatgpt-login/gpt-6.1-sol` | your ChatGPT subscription, through a Codex login kept for harness2 (`harness2 login codex`, once) |
 
-`harness2 init` picks these by default, and `harness2 doctor` checks that the CLI is logged
-in. Runs still keep your personal setup out of the harness being measured: Claude Code runs
-with `--setting-sources project,local --strict-mcp-config --no-session-persistence`, so your
-own `~/.claude/CLAUDE.md`, skills, plugins, MCP servers and settings are not loaded and no
-session history is written; Codex runs with `--ignore-user-config --ignore-rules`. Codex
-still reads a global `~/.codex/AGENTS.md` if you have one, and `doctor` says so.
+`harness2 init` picks these by default, and `harness2 login` and `harness2 doctor` say
+whether they are ready. Runs keep your personal setup out of the harness being measured:
+
+- **Claude Code** runs on its own login, with `--setting-sources project,local
+  --strict-mcp-config --no-session-persistence`: your `~/.claude/CLAUDE.md`, skills, plugins,
+  hooks, MCP servers and settings are not loaded, and no session history is written.
+- **Codex** cannot switch off a personal `~/.codex/hooks.json` or `~/.codex/AGENTS.md` with
+  a flag, so harness2 gives it a home of its own, `~/.local/state/harness2/codex-home`.
+  `harness2 login codex` signs that home in to ChatGPT once. It is a separate login: your own
+  `~/.codex` is never read or changed. Runs also pass `--ignore-user-config --ignore-rules`.
+
+To run Codex on your own home anyway, with whatever hooks and instructions it holds, set
+its path; `harness2 doctor` then lists the personal files every run will include:
+
+```toml
+[providers.chatgpt-login]
+home = "~/.codex"
+```
 
 Subscriptions have usage limits. When a run reaches one, it stops cleanly (exit code 4),
 keeps everything finished so far, and the same `harness2 run` command resumes once the

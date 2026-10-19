@@ -51,6 +51,8 @@ home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
 config = home / "config.toml"
 record = {"kind": kind, "argv": argv, "env": dict(os.environ), "cwd": str(cwd),
           "stdin": "" if status else sys.stdin.read(),
+          "agents_exists": (home / "AGENTS.md").exists(),
+          "hooks_exists": (home / "hooks.json").exists(),
           "config_exists": config.exists(),
           "config": config.read_text() if config.exists() else None}
 with open(os.environ["FAKE_RECORD"], "a") as log:
@@ -123,12 +125,15 @@ class SubscriptionTests(unittest.TestCase):
             path.mkdir(parents=True)
             (path / "config.toml").write_text("private user config")
             (path / "auth.json").write_text("private user auth")
+        (self.user_home / ".codex/AGENTS.md").write_text("Private user instructions.\n")
+        (self.user_home / ".codex/hooks.json").write_text('{"hooks": {}}\n')
         environment = patch.dict(
             os.environ,
             {
                 "PATH": f"{binary}{os.pathsep}{os.defpath}",
                 "HOME": str(self.user_home),
                 "XDG_CONFIG_HOME": str(self.root / "config"),
+                "XDG_STATE_HOME": str(self.root / "state"),
                 "FAKE_RECORD": str(self.record),
                 "CLAUDE_CODE_OAUTH_TOKEN": "fixture-oauth",
                 "ANTHROPIC_API_KEY": "ambient-anthropic",
@@ -294,7 +299,12 @@ class SubscriptionTests(unittest.TestCase):
             ],
         )
         for record in self.records():
-            self.assertNotIn("CODEX_HOME", record["env"])
+            self.assertEqual(
+                record["env"]["CODEX_HOME"], str(self.root / "state/harness2/codex-home")
+            )
+            self.assertFalse(record["config_exists"])
+            self.assertFalse(record["agents_exists"])
+            self.assertFalse(record["hooks_exists"])
             self.assertTrue(
                 all(
                     key not in record["env"]
@@ -302,8 +312,48 @@ class SubscriptionTests(unittest.TestCase):
                 )
             )
         self.assertEqual({p.name: p.read_bytes() for p in home.iterdir()}, before)
+        self.assertFalse((settings.state_dir() / "codex-home").exists())
 
-    def test_inherited_login_homes_are_preserved(self):
+    def test_configured_chatgpt_home_is_used_without_writes(self):
+        for populated in (False, True):
+            with self.subTest(populated=populated):
+                home = self.user_home / f"custom codex-{populated}"
+                if populated:
+                    home.mkdir()
+                    for name in ("auth.json", "config.toml", "AGENTS.md", "hooks.json"):
+                        (home / name).write_text("fixture " + name)
+                before = {p.name: p.read_bytes() for p in home.iterdir()} if populated else {}
+                adapter = self.adapter(
+                    f"custom-{populated}",
+                    **{
+                        "executor.name": "codex",
+                        "executor.model": "chatgpt-login/model",
+                        "improver.channel": "codex",
+                        "improver.model": "chatgpt-login/model",
+                        "providers.chatgpt-login.home": f"~/{home.name}",
+                    },
+                )
+                with patch.dict(os.environ, {"CODEX_HOME": str(self.user_home / ".codex")}):
+                    result = adapter.execute("one", None, "custom")
+                    self.assertFalse((result / "codex-home").exists())
+                    context = self.root / f"context-{populated}"
+                    context.mkdir()
+                    Proposer(adapter.spec.channels["proposer"]).call("mission", context, "custom")
+                for record in self.records()[-2:]:
+                    self.assertEqual(record["env"]["CODEX_HOME"], str(home))
+                    self.assertEqual(record["config_exists"], populated)
+                    self.assertEqual(record["agents_exists"], populated)
+                    self.assertEqual(record["hooks_exists"], populated)
+                    self.assertNotIn("OPENAI_API_KEY", record["env"])
+                    self.assertNotIn("CODEX_API_KEY", record["env"])
+                    self.assertIn("--ignore-user-config", record["argv"])
+                    self.assertIn("--ignore-rules", record["argv"])
+                    self.assertIn("--ephemeral", record["argv"])
+                after = {p.name: p.read_bytes() for p in home.iterdir()} if home.exists() else {}
+                self.assertEqual(after, before)
+                self.assertEqual(home.exists(), populated)
+
+    def test_inherited_claude_home_is_preserved_and_codex_home_is_overridden(self):
         context = self.root / "context"
         context.mkdir()
         for kind, provider_name, variable in (
@@ -324,14 +374,19 @@ class SubscriptionTests(unittest.TestCase):
                     },
                 )
                 adapter.execute("one", None, "inherited")
-                self.assertEqual(self.records()[-1]["env"][variable], os.environ[variable])
+                expected = (
+                    os.environ[variable]
+                    if kind == "claude"
+                    else str(settings.state_dir() / "codex-home")
+                )
+                self.assertEqual(self.records()[-1]["env"][variable], expected)
                 Proposer(adapter.spec.channels["proposer"]).call("mission", context, "inherited")
-                self.assertEqual(self.records()[-1]["env"][variable], os.environ[variable])
+                self.assertEqual(self.records()[-1]["env"][variable], expected)
 
     def test_login_status_success_failure_missing_cli_and_timeout(self):
         for kind, argv, login in (
             ("claude-login", ["auth", "status"], "claude auth login"),
-            ("chatgpt-login", ["login", "status"], "codex login"),
+            ("chatgpt-login", ["login", "status"], "harness2 login codex"),
         ):
             with self.subTest(provider=kind):
                 provider = providers.Provider(kind, kind)
@@ -339,9 +394,17 @@ class SubscriptionTests(unittest.TestCase):
                 record = self.records()[-1]
                 self.assertEqual(record["argv"], argv)
                 self.assertNotIn("CLAUDE_CONFIG_DIR", record["env"])
-                self.assertNotIn("CODEX_HOME", record["env"])
+                if kind == "chatgpt-login":
+                    self.assertEqual(
+                        record["env"]["CODEX_HOME"], str(settings.state_dir() / "codex-home")
+                    )
+                    self.assertNotIn("OPENAI_API_KEY", record["env"])
+                    self.assertNotIn("CODEX_API_KEY", record["env"])
+                else:
+                    self.assertNotIn("CODEX_HOME", record["env"])
                 self.assertTrue(all(key not in record["env"] for key in providers.STRIP_ENV))
-                problem = [f"{kind}: not logged in; run `{login}`"]
+                where = " for harness2" if kind == "chatgpt-login" else ""
+                problem = [f"{kind}: not logged in{where}; run `{login}`"]
                 with patch.dict(os.environ, {"FAKE_LOGIN_RC": "1"}):
                     self.assertEqual(providers.check(provider), problem)
                 with patch.dict(os.environ, {"PATH": ""}):
@@ -358,6 +421,33 @@ class SubscriptionTests(unittest.TestCase):
         )
         self.assertEqual(args[3], 'model"\nnext\x7f')
         self.assertEqual(tomllib.loads(args[5]), {"model_reasoning_effort": 'effort"\nnext'})
+
+    def test_codex_logged_in_checks_only_the_requested_home(self):
+        home = self.root / "login home"
+        with patch.dict(os.environ, {"CODEX_HOME": str(self.user_home / ".codex")}):
+            self.assertTrue(providers.codex_logged_in(home))
+        record = self.records()[-1]
+        self.assertEqual(record["argv"], ["login", "status"])
+        self.assertEqual(record["env"]["CODEX_HOME"], str(home))
+        self.assertFalse(record["config_exists"])
+        self.assertFalse(record["agents_exists"])
+        self.assertFalse(record["hooks_exists"])
+        self.assertTrue(
+            all(
+                key not in record["env"]
+                for key in (*providers.STRIP_ENV, "OPENAI_API_KEY", "CODEX_API_KEY")
+            )
+        )
+        with patch.dict(os.environ, {"FAKE_LOGIN_RC": "1"}):
+            self.assertFalse(providers.codex_logged_in(home))
+        for error in (FileNotFoundError(), subprocess.TimeoutExpired("codex", 10), ValueError()):
+            with (
+                self.subTest(error=type(error).__name__),
+                patch("harness2.providers.subprocess.run", side_effect=error) as run,
+            ):
+                self.assertFalse(providers.codex_logged_in(home))
+                self.assertEqual(run.call_args.kwargs["timeout"], 10)
+        self.assertFalse(home.exists())
 
     def test_api_provider_homes_and_ambient_oauth_are_unchanged(self):
         for kind, provider_name in (("claude", "anthropic"), ("codex", "openai")):
@@ -453,13 +543,15 @@ class SubscriptionTests(unittest.TestCase):
         output = io.StringIO()
         argv = ["-C", str(self.project), "--json"]
         for key, value in adapter.settings.flat().items():
-            if key.startswith(("executor.", "improver.")) and not isinstance(value, list):
+            if key.startswith(("executor.", "improver.", "providers.")) and not isinstance(
+                value, list
+            ):
                 argv += ["-c", f"{key}={json.dumps(value)}"]
         with contextlib.redirect_stdout(output):
             code = main([*argv, "doctor"])
         return code, {row["check"]: row for row in json.loads(output.getvalue())}
 
-    def test_doctor_login_status_and_global_codex_instructions(self):
+    def test_doctor_login_status_uses_dedicated_codex_home(self):
         adapter = self.adapter(
             **{
                 "executor.name": "codex",
@@ -468,24 +560,15 @@ class SubscriptionTests(unittest.TestCase):
                 "improver.model": "chatgpt-login/model",
             }
         )
-        agents = self.user_home / ".codex/AGENTS.md"
-        agents.write_text("Global rules. 한글\n")
         code, rows = self.doctor(adapter)
         self.assertEqual(code, 0)
-        self.assertEqual(
-            rows["Codex global AGENTS.md"],
-            {
-                "check": "Codex global AGENTS.md",
-                "ok": True,
-                "detail": "your global AGENTS.md (17 characters) is part of every Codex run",
-            },
-        )
+        self.assertNotIn("Codex home", rows)
         with patch.dict(os.environ, {"FAKE_LOGIN_RC": "1"}):
             code, rows = self.doctor(adapter)
             self.assertEqual(code, 1)
             self.assertEqual(
                 rows["provider chatgpt-login"]["detail"],
-                "chatgpt-login: not logged in; run `codex login`",
+                "chatgpt-login: not logged in for harness2; run `harness2 login codex`",
             )
             code, rows = self.doctor(self.adapter())
             self.assertEqual(code, 1)
@@ -494,25 +577,55 @@ class SubscriptionTests(unittest.TestCase):
                 "claude-login: not logged in; run `claude auth login`",
             )
         _, rows = self.doctor(self.adapter())
-        self.assertNotIn("Codex global AGENTS.md", rows)
-        agents.write_text("")
-        _, rows = self.doctor(adapter)
-        self.assertNotIn("Codex global AGENTS.md", rows)
-        other = self.root / "custom-codex"
-        other.mkdir()
-        (other / "AGENTS.md").write_text("custom")
-        with patch.dict(os.environ, {"CODEX_HOME": str(other)}):
-            _, rows = self.doctor(adapter)
-        self.assertEqual(
-            rows["Codex global AGENTS.md"]["detail"],
-            "your global AGENTS.md (6 characters) is part of every Codex run",
-        )
+        self.assertNotIn("Codex home", rows)
+        self.assertFalse((settings.state_dir() / "codex-home").exists())
         self.assertTrue(
             all(
                 record["argv"] in (["auth", "status"], ["login", "status"])
                 for record in self.records()
             )
         )
+
+    def test_doctor_custom_codex_home_login_and_instruction_files(self):
+        home = self.user_home / "custom-codex"
+        home.mkdir()
+        adapter = self.adapter(
+            **{
+                "executor.name": "codex",
+                "executor.model": "chatgpt-login/model",
+                "improver.channel": "codex",
+                "improver.model": "chatgpt-login/model",
+                "providers.chatgpt-login.home": "~/custom-codex",
+            }
+        )
+        with patch.dict(os.environ, {"FAKE_LOGIN_RC": "1"}):
+            code, rows = self.doctor(adapter)
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            rows["provider chatgpt-login"]["detail"],
+            f"chatgpt-login: not logged in at {home}; run `codex login` with CODEX_HOME={home}",
+        )
+        self.assertEqual(self.records()[-1]["env"]["CODEX_HOME"], str(home))
+        for files in ((), ("hooks.json",), ("AGENTS.md",), ("AGENTS.md", "hooks.json")):
+            with self.subTest(files=files):
+                for name in ("AGENTS.md", "hooks.json"):
+                    (home / name).write_text("fixture" if name in files else "")
+                before = {p.name: p.read_bytes() for p in home.iterdir()}
+                code, rows = self.doctor(adapter)
+                self.assertEqual(code, 0)
+                if files:
+                    self.assertEqual(
+                        rows["Codex home"],
+                        {
+                            "check": "Codex home",
+                            "ok": True,
+                            "detail": " and ".join(str(home / name) for name in files)
+                            + " are part of every Codex run",
+                        },
+                    )
+                else:
+                    self.assertNotIn("Codex home", rows)
+                self.assertEqual({p.name: p.read_bytes() for p in home.iterdir()}, before)
 
     def test_executor_usage_limits_stop_and_resume_entire_run(self):
         adapter = self.adapter()

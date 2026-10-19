@@ -39,6 +39,7 @@ COMMANDS = (
     "config",
     "chat",
     "guide",
+    "login",
     "setup",
     "demo",
     "bridge",

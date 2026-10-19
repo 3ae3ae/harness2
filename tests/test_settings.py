@@ -65,6 +65,16 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(resolved.get("executor.editable"), [])
         self.assertEqual(settings.load(None).section("executor"), settings.DEFAULTS["executor"])
 
+    def test_state_dir_uses_xdg_or_home_without_creating_it(self):
+        with patch.dict(os.environ, {"HOME": str(self.root)}, clear=True):
+            self.assertEqual(settings.state_dir(), self.root / ".local/state/harness2")
+            self.assertFalse(settings.state_dir().exists())
+            os.environ["XDG_STATE_HOME"] = str(self.root / "state")
+            self.assertEqual(settings.state_dir(), self.root / "state/harness2")
+            self.assertFalse(settings.state_dir().exists())
+            os.environ["XDG_STATE_HOME"] = ""
+            self.assertEqual(settings.state_dir(), self.root / ".local/state/harness2")
+
     def test_precedence_and_origins_across_all_six_layers(self):
         self.write(self.global_file, "[run]\nk = 2\nworkers = 2\n")
         self.write(

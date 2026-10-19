@@ -47,8 +47,9 @@ project's files; `harness2 apply` writes the final harness back once the person 
 ## Workflow
 
 1. `harness2 init --yes [--executor claude|codex] [--auth login|api-key]` creates
-   .harness2/. `--auth login` uses the agent CLI's own login (a Claude or ChatGPT
-   subscription). Change any choice afterwards with `harness2 config set KEY VALUE`, for
+   .harness2/. `--auth login` uses a Claude or ChatGPT subscription: Claude Code's own login
+   as it is, or for Codex a separate login the person makes once with `harness2 login codex`
+   (it opens a browser; ask them to run it). `harness2 login --json` shows which are ready. Change any choice afterwards with `harness2 config set KEY VALUE`, for
    example `executor.model`.
 2. Tasks. `harness2 task new <id> [--files] [--check "<cmd>"]`, then write the request in
    .harness2/tasks/<id>/task.md the way the person would really ask for it. Good tasks are

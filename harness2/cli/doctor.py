@@ -16,9 +16,7 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
-from pathlib import Path
 
 from .. import providers, registry
 from ..core.proposer import Proposer
@@ -130,16 +128,21 @@ def run(args, ctx) -> int:
                 "detail": "; ".join(problems) or detail,
             }
         )
-    if any(config.provider(name).type == "chatgpt-login" for name in referenced):
-        agents = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "AGENTS.md"
-        if agents.is_file() and (text := agents.read_text(encoding="utf-8")):
-            rows.append(
-                {
-                    "check": "Codex global AGENTS.md",
-                    "ok": True,
-                    "detail": f"your global AGENTS.md ({len(text)} characters) is part of every Codex run",
-                }
-            )
+        if provider.type == "chatgpt-login":
+            home = providers.codex_login_home(provider)
+            files = [
+                str(path)
+                for name in ("AGENTS.md", "hooks.json")
+                if (path := home / name).is_file() and path.stat().st_size
+            ]
+            if files:
+                rows.append(
+                    {
+                        "check": "Codex home",
+                        "ok": True,
+                        "detail": " and ".join(files) + " are part of every Codex run",
+                    }
+                )
     if args.live:
         for (channel, model), spec in sorted(models.items()):
 

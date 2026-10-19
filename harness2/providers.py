@@ -21,9 +21,10 @@ import os
 import re
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urlsplit
 
-from .settings import ConfigError
+from .settings import ConfigError, state_dir
 
 PROVIDER_TYPES = ("anthropic", "openai", "vertex", "bedrock", "claude-login", "chatgpt-login")
 USAGE_LIMIT = re.compile(
@@ -53,6 +54,35 @@ class Provider:
     api_key_env: str = ""
     project: str = ""
     region: str = ""
+    home: str = ""
+
+
+def codex_login_home(p: Provider) -> Path:
+    return Path(p.home).expanduser() if p.home else state_dir() / "codex-home"
+
+
+def codex_logged_in(home: Path) -> bool:
+    try:
+        return (
+            subprocess.run(
+                ["codex", "login", "status"],
+                env={
+                    **{
+                        k: v
+                        for k, v in os.environ.items()
+                        if k not in (*STRIP_ENV, "OPENAI_API_KEY", "CODEX_API_KEY")
+                    },
+                    "CODEX_HOME": str(home),
+                },
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            ).returncode
+            == 0
+        )
+    except Exception:
+        return False
 
 
 def split_model(ref: str) -> tuple[str, str]:
@@ -182,22 +212,20 @@ def litellm_params(p: Provider, model: str) -> dict:
 
 
 def check(p: Provider) -> list[str]:
-    if p.type in ("claude-login", "chatgpt-login"):
-        argv = (
-            ["claude", "auth", "status"]
-            if p.type == "claude-login"
-            else ["codex", "login", "status"]
-        )
-        login = "claude auth login" if p.type == "claude-login" else "codex login"
+    if p.type == "chatgpt-login":
+        home = codex_login_home(p)
+        if codex_logged_in(home):
+            return []
+        if p.home:
+            return [
+                f"chatgpt-login: not logged in at {home}; run `codex login` with CODEX_HOME={home}"
+            ]
+        return ["chatgpt-login: not logged in for harness2; run `harness2 login codex`"]
+    if p.type == "claude-login":
         try:
             result = subprocess.run(
-                argv,
-                env={
-                    k: v
-                    for k, v in os.environ.items()
-                    if k not in STRIP_ENV
-                    and (p.type != "chatgpt-login" or k not in ("OPENAI_API_KEY", "CODEX_API_KEY"))
-                },
+                ["claude", "auth", "status"],
+                env={k: v for k, v in os.environ.items() if k not in STRIP_ENV},
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -207,7 +235,7 @@ def check(p: Provider) -> list[str]:
                 return []
         except (OSError, subprocess.SubprocessError):
             pass
-        return [f"{p.type}: not logged in; run `{login}`"]
+        return ["claude-login: not logged in; run `claude auth login`"]
     problems = []
     if p.api_key_env and not os.environ.get(p.api_key_env):
         problems.append(f"{p.name}: set {p.api_key_env}")

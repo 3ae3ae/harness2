@@ -103,6 +103,10 @@ def cache_dir() -> Path:
     return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "harness2"
 
 
+def state_dir() -> Path:
+    return Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "harness2"
+
+
 def parse_value(raw: str) -> Any:
     """Parse a TOML literal, falling back to an unquoted string."""
     try:
@@ -241,7 +245,7 @@ class Settings:
         configured = self.section("providers")
         if name not in configured:
             raise ConfigError(f"unknown provider {name!r}; configure providers.{name}")
-        fields = ("type", "base_url", "api_key_env", "project", "region")
+        fields = ("type", "base_url", "api_key_env", "project", "region", "home")
         return providers.Provider(
             name, **{k: v for k, v in configured[name].items() if k in fields}
         )
