@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from .. import config
 from ..core import library as LIB
 from ..core import schedule as SCHED
 from ..core.spec import BenchmarkAdapter
@@ -53,18 +54,25 @@ def make_adapter(
     if bench == "wb":
         if subset not in WB_SUBSETS:
             raise ValueError(f"--bench wb needs --subset from {WB_SUBSETS}, got {subset!r} ")
-        from ..benchmarks.workbuddy import WbAdapter
+        from harness2_benchmarks.workbuddy import WbAdapter
 
-        return WbAdapter(subset, substrate=substrate, split_file=split_file)
+        return WbAdapter(
+            subset,
+            substrate=substrate,
+            split_file=split_file,
+            runs_root=config.RUNS / "wb" / subset,
+        )
     if subset:
         raise ValueError(f"--subset applies to --bench wb only, got {subset!r} for {bench}")
     if bench == "jb":
-        from ..benchmarks.jobbench import JobBenchAdapter
+        from harness2_benchmarks.jobbench import JobBenchAdapter
 
-        return JobBenchAdapter(substrate=substrate, split_file=split_file)
-    from ..benchmarks.lab import LabAdapter
+        return JobBenchAdapter(
+            substrate=substrate, split_file=split_file, runs_root=config.RUNS / "jb"
+        )
+    from harness2_benchmarks.lab import LabAdapter
 
-    return LabAdapter(substrate=substrate, split_file=split_file)
+    return LabAdapter(substrate=substrate, split_file=split_file, runs_root=config.RUNS / "lab")
 
 
 def runs_root_for(adapter: BenchmarkAdapter) -> Path:

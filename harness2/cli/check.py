@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import argparse
 
+from harness2_benchmarks.preflight import check
+
 from harness2.cli._common import make_adapter
-from harness2.preflight import check
 
 
 def main(argv=None):
@@ -36,7 +37,7 @@ def main(argv=None):
     for error in errors:
         print(f"FAIL: {error}")
     if errors:
-        print(f"Setup incomplete: {len(errors)} issue(s). See docs/BENCHMARKS.md.")
+        print(f"Setup incomplete: {len(errors)} issue(s). See plugins/harness2-benchmarks/docs/BENCHMARKS.md.")
         return 1
     print(
         f"Ready: {adapter.spec.name}/{args.substrate}; {len(adapter.tasks())} tasks. "
