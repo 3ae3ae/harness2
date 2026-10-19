@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 from pathlib import Path
 
@@ -24,34 +23,51 @@ from ..core.schedule import mode_token, run_domain
 from ..demo import DemoAdapter, DemoProposer
 
 
-def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+def add_parser(subparsers):
+    parser = subparsers.add_parser("demo")
     parser.add_argument("--output", type=Path, default=Path("runs/demo"))
     parser.add_argument("--k", type=int, default=2)
     parser.add_argument("--mode", choices=("parallel", "sequential", "both"), default="both")
-    args = parser.parse_args(argv)
+    return parser
+
+
+def run(args, ctx) -> int:
     if args.k < 1:
-        parser.error("--k must be positive")
+        raise ValueError("--k must be positive")
     root = args.output.expanduser().resolve()
     adapter = DemoAdapter(root)
     proposer = DemoProposer(adapter.spec.channels["proposer"])
     modes = ("agg", "seq") if args.mode == "both" else (mode_token(args.mode),)
-    result = run_domain(
-        "accounting",
-        adapter.tasks(),
-        args.k,
-        adapter=adapter,
-        prop=proposer,
-        runs_root=adapter.spec.runs_root,
-        library_root=root / "library" / f"k{args.k}",
-        modes=modes,
-    )
+    with ctx.progress():
+        result = run_domain(
+            "accounting",
+            adapter.tasks(),
+            args.k,
+            adapter=adapter,
+            prop=proposer,
+            runs_root=adapter.spec.runs_root,
+            library_root=root / "library" / f"k{args.k}",
+            modes=modes,
+        )
     result["execution_count"] = adapter.execution_count
     result["editor_calls"] = len(proposer._calls)
     report = root / "demo.json"
     report.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-    print(f"Local demo: {result['done']} tasks completed; {result['failed']} failed. {report}")
+    ctx.out(
+        result,
+        lambda data: (
+            f"Local demo: {data['done']} tasks completed; {data['failed']} failed. {report}"
+        ),
+    )
     return int(result["failed"] > 0)
+
+
+def main(argv=None) -> int:
+    import sys
+
+    from .main import main as cli_main
+
+    return cli_main(["demo", *(sys.argv[1:] if argv is None else argv)])
 
 
 if __name__ == "__main__":

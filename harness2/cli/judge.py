@@ -12,32 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Judge the SELECTED run of each finished task in one namespace, and cache the rows.
-
-Only the run the blind terminal selector chose is scored. A judge failure is recorded as
-ungraded (score=None), never as a zero. Re-running re-judges every selection, but
-adapters serve cached judge details and a failed re-judge never replaces an existing
-graded row.
-
-    python3 -m harness2.cli.judge --bench jb --substrate oc --k 2 --modes parallel
-
-With --bases it scores this namespace's reference executions instead, so the initial
-harness can be reported beside the adapted one.
-
-Output: <runs_root>/<namespace>/judged.json (judge.write format), consumed by cli.report;
-or base_judged.json under --bases, one row per (task, base<i>).
-"""
+"""Judge finished selections using the saved run settings."""
 
 from __future__ import annotations
 
-import argparse
 import json
-import sys
 from pathlib import Path
 
-from .. import config
 from ..core import judge as J
+from ..core.runmark import resolve_path
+from ..settings import ConfigError
 from . import _common as C
+from ._adopt import open_run
 
 _DERIVED = ("frac", "graded")
 
@@ -54,8 +40,8 @@ def _load_rows(path: Path) -> list[J.Scored]:
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"unreadable judged cache {path}: {exc}; move it aside to rebuild")
     rows = []
-    for row in raw:
-        row = {k: v for k, v in row.items() if k not in _DERIVED}
+    for row in raw.get("rows", []) if isinstance(raw, dict) else raw:
+        row = {k: v for k, v in row.items() if k not in (*_DERIVED, "judge_model")}
         if "mode" not in row and "arm" in row:
             row["mode"] = row.pop("arm")
         rows.append(J.Scored(**row))
@@ -96,8 +82,7 @@ def collect_selections(ns_dir: Path, modes: tuple[str, ...]) -> list[dict]:
         try:
             summary = json.loads(summary_path.read_text())
         except (OSError, json.JSONDecodeError) as exc:
-            print(f"  ! skipping unreadable {summary_path}: {exc}", flush=True)
-            continue
+            raise ConfigError(f"cannot read {summary_path}: {exc}") from exc
         for mode in modes:
             sel = (summary.get("selections") or {}).get(mode)
             if sel:
@@ -105,100 +90,94 @@ def collect_selections(ns_dir: Path, modes: tuple[str, ...]) -> list[dict]:
     return out
 
 
-def judge_bases(adapter, ns_dir: Path) -> int:
-    """Score every reference execution recorded in this namespace's task summaries."""
-    rows, legacy = [], 0
+def add_parser(subparsers):
+    p = subparsers.add_parser("judge")
+    p.add_argument("name", nargs="?")
+    p.add_argument("--bases", action="store_true", help="Judge reference executions.")
+    return p
+
+
+def _judge_model(path, model):
+    if not path.is_file():
+        return
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise ConfigError(f"cannot read {path}: {exc}") from exc
+    old = data.get("judge_model") if isinstance(data, dict) else None
+    if old is not None and old != model:
+        raise ConfigError(f"judge model differs: {old!r} -> {model!r}; delete {path} to re-judge")
+
+
+def judge_bases(adapter, ns_dir: Path, *, log, allowed) -> list[dict]:
+    rows = []
     for summary_path in sorted(ns_dir.glob("*/summary.json")):
-        try:
-            summary = json.loads(summary_path.read_text())
-        except (OSError, json.JSONDecodeError) as exc:
-            print(f"  ! skipping unreadable {summary_path}: {exc}", flush=True)
+        summary = json.loads(summary_path.read_text())
+        task = summary["task_id"]
+        if not allowed(task):
             continue
-        task_id = summary.get("task_id", "")
         for entry in summary.get("base") or []:
             if not isinstance(entry, dict) or not entry.get("run_dir"):
-                legacy += 1
+                log(f"{task}: reference execution has no run directory")
                 continue
-            label, run_dir = entry.get("label", ""), Path(entry["run_dir"])
-            try:
-                got = adapter.score(run_dir, task_id) if run_dir.is_dir() else None
-            except Exception as exc:
-                got = None
-                print(f"  {task_id[:52]:<52} {label} ERROR {type(exc).__name__}: {exc}", flush=True)
-            else:
-                shown = "-" if got is None else f"{got.get('n_passed')}/{got.get('n_criteria')}"
-                print(f"  {task_id[:52]:<52} {label} {shown}", flush=True)
-            rows.append(
-                {"task": task_id, "label": label, "run_id": entry.get("run_id", ""), "score": got}
+            run_dir = resolve_path(entry["run_dir"], adapter.spec.runs_root)
+            row = J.judge_one(
+                adapter,
+                task,
+                "base",
+                summary["k"],
+                entry.get("label", ""),
+                entry.get("run_id", ""),
+                run_dir,
+                chosen_is_base=True,
             )
-    if legacy:
-        print(
-            f"  {legacy} reference execution(s) predate run-directory recording and cannot be "
-            f"scored; re-run those tasks to include them.",
-            flush=True,
-        )
-    if not rows:
-        print(f"no reference executions recorded under {ns_dir}; wrote nothing", flush=True)
-        return 2
-    out = ns_dir / "base_judged.json"
-    out.write_text(json.dumps(rows, indent=1, default=str), encoding="utf-8")
-    graded = sum(1 for r in rows if r["score"] is not None)
-    print(f"wrote {out}: {len(rows)} row(s), {graded} graded")
-    return 0 if graded == len(rows) else 2
+            rows.append(row.__dict__ | {"graded": row.graded, "frac": row.frac})
+    return rows
 
 
-def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(
-        prog="harness2.cli.judge", description=__doc__, formatter_class=C.HelpFormatter
+def run(args, ctx) -> int:
+    with ctx.progress():
+        adapter, root = open_run(ctx, args.name)
+    record = C.load_run(root)
+    config = C.run_settings(ctx, record)
+    model = config.role("judge")["model"]
+    plan = record["schedule"]
+    ns_dir = C.runs_root_for(adapter) / C.summary_namespace(
+        adapter, plan["k"], seed=plan.get("seed")
     )
-    C.add_cell_args(p.add_argument_group("cell"))
-    C.add_run_identity_args(p.add_argument_group("run identity (names the sweep)"))
-    p.add_argument(
-        "--bases",
-        action="store_true",
-        help="score this namespace's reference executions into base_judged.json "
-        "instead of the selected runs",
-    )
-    args = p.parse_args(argv)
-    modes = C.parse_modes(args.modes)
+    path = ns_dir / ("base_judged.json" if args.bases else "judged.json")
+    _judge_model(path, model)
+    skipped = set()
 
-    config.validate_models(judge=True)
-    adapter = C.make_adapter(args.bench, args.subset, args.substrate)
-    ns = C.summary_namespace(adapter, args.k, seed=args.seed)
-    ns_dir = C.runs_root_for(adapter) / ns
-    identity = ns_dir / "config.json"
-    if identity.is_file() and json.loads(identity.read_text()).get("judge") != config.JUDGE_MODEL:
-        raise SystemExit("Judge model changed for this experiment; choose a new HARNESS2_RUNS_DIR")
-    if not ns_dir.is_dir():
-        raise SystemExit(
-            f"nothing to judge: {ns_dir} does not exist — has the sweep `{ns}` run on this machine?"
-        )
+    def allowed(task):
+        if not hasattr(adapter, "has_judge") or adapter.has_judge(task):
+            return True
+        if task not in skipped:
+            ctx.log(f"{task}: no judge; skipped")
+            skipped.add(task)
+        return False
+
     if args.bases:
-        return judge_bases(adapter, ns_dir)
-
-    sels = collect_selections(ns_dir, modes)
-    if not sels:
-        raise SystemExit(
-            f"nothing to judge: no selections for modes "
-            f"{[C.mode_label(m) for m in modes]} under {ns_dir} (tasks may still "
-            f"be running, or the wrong --k/--seed was given)"
-        )
-
-    print(f"judging {len(sels)} selection(s) under {ns} ...", flush=True)
-    rows = J.judge_selections(adapter, sels, parallel=_PARALLEL)
-
-    out_path = ns_dir / "judged.json"
-    merged = _merge(_load_rows(out_path), rows)
-    J.write(merged, out_path)
-
-    graded = sum(1 for r in merged if r.graded)
-    print(
-        f"judged.json: {len(merged)} row(s), {graded} graded, "
-        f"{len(merged) - graded} ungraded (judge failure or no pick — NOT zeros)"
+        with ctx.progress():
+            rows = judge_bases(adapter, ns_dir, log=ctx.log, allowed=allowed)
+    else:
+        selections = [
+            s
+            for s in collect_selections(ns_dir, C.parse_modes(plan["modes"]))
+            if allowed(s["task_id"])
+        ]
+        with ctx.progress():
+            new = J.judge_selections(adapter, selections, parallel=_PARALLEL)
+        merged = _merge([row for row in _load_rows(path) if allowed(row.task_id)], new)
+        rows = [row.__dict__ | {"graded": row.graded, "frac": row.frac} for row in merged]
+    if not rows:
+        ctx.out([], lambda _: "no tasks to judge")
+        return 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"judge_model": model, "rows": rows}, indent=2) + "\n", encoding="utf-8"
     )
-    print(f"wrote {out_path}")
-    return 0 if rows and all(r.graded for r in rows) else 2
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+    ctx.out(
+        rows, lambda data: f"{path}: {len(data)} rows, {sum(row['graded'] for row in data)} graded"
+    )
+    return 0 if all(row["graded"] for row in rows) else 1
