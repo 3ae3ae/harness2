@@ -117,7 +117,9 @@ def _estimate(tasks: int, k: int, modes: tuple[str, ...], totals: dict) -> dict:
 
 
 def _spend(totals: dict) -> str:
-    return f" · ${totals['spent_usd']:.2f} spent · {totals['calls']} model calls"
+    # Codex and subscriptions report no money; $0.00 would read as "free".
+    money = f"${totals['spent_usd']:.2f} spent" if totals["spent_usd"] else "spend not reported"
+    return f" · {money} · {totals['calls']} model calls"
 
 
 def _stopped(name: str, reason: str, totals: dict) -> str:

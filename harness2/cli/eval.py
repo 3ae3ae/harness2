@@ -82,22 +82,28 @@ def _text(data):
     def percent(value):
         return "-" if value is None else f"{value * 100:g}%"
 
-    lines = [
-        f"Comparing the consolidated harness with the starting one on {len(data['tasks'])} "
-        f"task(s), {data['repeat']} run(s) each.",
-        "TASK  START  CONSOLIDATED",
-    ]
-    for task, row in data["tasks"].items():
-        lines.append(
-            f"{task}  {percent(row['start']['mean'])}  {percent(row['consolidated']['mean'])}"
-        )
     start, consolidated = data["mean"]["start"], data["mean"]["consolidated"]
     delta = (
         f"{(consolidated - start) * 100:+g}"
         if start is not None and consolidated is not None
         else "-"
     )
-    lines.append(f"mean  {percent(start)}  {percent(consolidated)}  ({delta} points)")
+    rows = [("TASK", "START", "FINAL")]
+    rows += [
+        (task, percent(row["start"]["mean"]), percent(row["consolidated"]["mean"]))
+        for task, row in data["tasks"].items()
+    ]
+    rows.append(("mean", percent(start), percent(consolidated)))
+    width = max(len(r[0]) for r in rows)
+    table = [f"  {a:<{width}}  {b:>5}  {c:>5}" for a, b, c in rows]
+    table[-1] += f"  ({delta} points)"
+    lines = [
+        f"Comparing the final harness with the starting one on {len(data['tasks'])} "
+        f"task(s), {data['repeat']} run(s) each.",
+        "",
+        *table,
+        "",
+    ]
     if data["skipped"]:
         lines.append(
             f"Skipped {len(data['skipped'])} task(s) with no check or rubric: "

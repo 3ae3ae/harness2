@@ -213,9 +213,9 @@ class ConsolidateTests(unittest.TestCase):
         self.assertEqual(task["label"], "a-one")
         self.assertIn("+Task note.", task["diffs"]["CLAUDE.md"])
         applied, _ = self.invoke("apply", "trial", "--dry-run", "--task", "a-one")
-        self.assertIn("Harness adopted for a-one (parallel, run trial)", applied)
+        self.assertIn("Harness adopted for a-one (run trial, parallel)", applied)
         applied, _ = self.invoke("apply", "trial", "--yes")
-        self.assertIn("Harness consolidated from the run's tasks (parallel, run trial)", applied)
+        self.assertIn("Final harness of run trial (parallel)", applied)
         self.assertEqual((self.project / "CLAUDE.md").read_text(), "Use shared procedure.\n")
         text, _ = self.invoke("eval", "trial", "--repeat", "2")
         self.assertIn(
@@ -277,8 +277,8 @@ class ConsolidateTests(unittest.TestCase):
         self.assertEqual(json.loads(Path(data["path"]).read_text()), data)
         with patch.object(GenericAdapter, "score", return_value=None):
             text, _ = self.invoke("eval", "trial", "--only-tasks", "a-one", code=3)
-        self.assertIn("a-one  -  -", text)
-        self.assertIn("mean  -  -  (- points)", text)
+        self.assertRegex(text, r"a-one +- +-")
+        self.assertRegex(text, r"mean +- +-  \(- points\)")
         data = json.loads((self.run_dir / "eval/parallel/results.json").read_text())
         self.assertEqual(data["tasks"]["a-one"]["start"], {"runs": [None], "mean": None})
         text, _ = self.invoke("-c", "run.max_calls=1", "eval", "trial", code=4)
@@ -429,7 +429,7 @@ class ConsolidateTests(unittest.TestCase):
             "path": "results.json",
             "mean": {"start": 1.0, "consolidated": 0.0},
         }
-        self.assertIn("mean  100%  0%  (-100 points)", eval._text(data))
+        self.assertRegex(eval._text(data), r"mean +100% +0%  \(-100 points\)")
 
     def test_command_order_and_help(self):
         i = COMMANDS.index("diff")
