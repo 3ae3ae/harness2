@@ -42,8 +42,33 @@ parse as TOML is taken as a plain string: `-c executor.model=openai/gpt-6.1-sol`
 ## Models and providers
 
 Every model is written `provider/model`. The provider part names a `[providers.<name>]`
-table, which says what kind of endpoint it is and where its key comes from. Two providers
-are built in:
+table, which says what kind of endpoint it is and how it is reached.
+
+### Subscriptions
+
+Two built-in providers use the login your installed CLI already has, so a subscription is
+all you need:
+
+| Model | Runs on |
+|---|---|
+| `claude-login/<model>`, e.g. `claude-login/claude-sonnet-5-5` | your Claude subscription, through Claude Code's login (`claude auth login`) |
+| `chatgpt-login/<model>`, e.g. `chatgpt-login/gpt-6.1-sol` | your ChatGPT subscription, through Codex's login (`codex login`) |
+
+`harness2 init` picks these by default, and `harness2 doctor` checks that the CLI is logged
+in. Runs still keep your personal setup out of the harness being measured: Claude Code runs
+with `--setting-sources project,local --strict-mcp-config --no-session-persistence`, so your
+own `~/.claude/CLAUDE.md`, skills, plugins, MCP servers and settings are not loaded and no
+session history is written; Codex runs with `--ignore-user-config --ignore-rules`. Codex
+still reads a global `~/.codex/AGENTS.md` if you have one, and `doctor` says so.
+
+Subscriptions have usage limits. When a run reaches one, it stops cleanly (exit code 4),
+keeps everything finished so far, and the same `harness2 run` command resumes once the
+limit resets. With a subscription, keep `run.phase_width` and `run.proposer_concurrency`
+low, and cap runs with `--max-calls`.
+
+### API keys and other endpoints
+
+Two API-key providers are built in:
 
 ```toml
 [providers.anthropic]
@@ -88,6 +113,8 @@ Each agent CLI speaks to some provider types and not others:
 
 | Provider type | Claude Code (`claude`) | Codex (`codex`) | OpenCode (`opencode`) |
 |---|---|---|---|
+| `claude-login` | yes | no | no |
+| `chatgpt-login` | no | yes | no |
 | `anthropic` | yes | via `harness2 bridge` | yes |
 | `openai` | no | yes (Responses API) | yes (Chat Completions) |
 | `vertex` | yes | via `harness2 bridge` | yes |
@@ -95,7 +122,7 @@ Each agent CLI speaks to some provider types and not others:
 
 `harness2 doctor` reports a model whose provider its CLI cannot use. To run Codex on a model
 it cannot reach directly, serve that model as a Responses API endpoint with the bridge
-(`pip install 'harness2[bridge]'`), then point an `openai`-type provider at it:
+(`pip install 'harness2-cli[bridge]'`), then point an `openai`-type provider at it:
 
 ```bash
 harness2 bridge --model anthropic/claude-sonnet-5-5
@@ -104,12 +131,10 @@ harness2 bridge --model anthropic/claude-sonnet-5-5
 The agent CLIs are the ones installed on your system (`claude`, `codex`, `opencode` on
 `PATH`). Set `executor.bin` or `improver.bin` to use another binary or a full command.
 
-**Logins are not used.** Every run gives the agent CLI a fresh, empty configuration
-directory (`CLAUDE_CONFIG_DIR` for Claude Code, `CODEX_HOME` for Codex), so your personal
-instructions, skills, plugins and settings never leak into the harness being measured.
-That also means the CLI does not see your interactive login: models are reached with the
-provider's API key. `harness2 chat` is the exception: it starts your own CLI as you normally
-use it.
+With an API-key provider, every run also gets a fresh, empty configuration directory
+(`CLAUDE_CONFIG_DIR` for Claude Code, `CODEX_HOME` for Codex), the strictest isolation.
+`harness2 chat` is different from runs: it starts your own CLI exactly as you normally use
+it.
 
 ## Reference
 
@@ -169,8 +194,9 @@ person.
 | `max_calls` | `0` | Stop the run after this many model calls (rollouts plus sessions). `0` means no limit. |
 
 Spending is counted from the costs the CLIs report. Claude Code and OpenCode report dollars;
-Codex reports tokens only, so `budget_usd` does not see Codex spending. Use `max_calls` to
-bound a Codex run.
+Codex reports tokens only, so `budget_usd` does not see Codex spending, and with a
+subscription the reported dollars are an estimate rather than a charge. Use `max_calls` to
+bound those runs. A call already in flight when a limit is reached still finishes.
 
 ### `[suite]`
 

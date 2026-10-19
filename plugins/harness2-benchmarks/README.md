@@ -2,7 +2,7 @@
 
 The three benchmarks of the paper
 [Harness²: Recursive Agent Harnessing for an Open World](https://arxiv.org/abs/2610.14224),
-packaged as suites for the `harness2` command:
+packaged as suites for the `harness2` command of [Harness² CLI](../../README.md):
 
 | Suite | Benchmark | Work |
 |---|---|---|
@@ -15,7 +15,7 @@ compatibility patches of the paper, and grade with each benchmark's own judge.
 
 ## Install
 
-From a checkout of this repository, next to `harness2`:
+From a checkout of this repository, next to `harness2-cli`:
 
 ```bash
 uv pip install -e . -e 'plugins/harness2-benchmarks[render]'

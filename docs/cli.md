@@ -23,7 +23,7 @@ These go before the command: `harness2 -C ../api --json status`.
 | `-c KEY=VALUE`, `--config KEY=VALUE` | Override one setting for this command; repeatable. See [Configuration](configuration.md). |
 | `-q`, `--quiet` | Print results only, no progress. |
 | `-v`, `--verbose` | Print debug details. |
-| `--json` | Print results as JSON on stdout; progress still goes to stderr. |
+| `--json` | Print results as JSON on stdout; progress still goes to stderr. A failing command prints `{"error": "...", "exit_code": n}` instead of an error line. |
 | `--version` | Print the version. |
 
 ## Commands
@@ -31,13 +31,15 @@ These go before the command: `harness2 -C ../api --json status`.
 ### `init`
 
 Set up harness2 in a project: asks which agent runs your tasks (`claude`, `codex` or a
-custom `command`), which models to use, and where the harness lives; writes
+custom `command`), whether it reaches its models through the CLI's own login (your
+subscription) or an API key, which models to use, and where the harness lives; writes
 `.harness2/config.toml`, `.harness2/.gitignore` and `.harness2/tasks/`.
 
 | Option | Meaning |
 |---|---|
-| `--yes`, `-y` | Take every default without asking. |
+| `--yes`, `-y` | Take every default without asking. Without a terminal, defaults are taken anyway. |
 | `--executor {claude,codex,command}` | Skip the executor question. |
+| `--auth {login,api-key}` | Skip the login question. |
 | `--force` | Overwrite an existing config file. |
 
 ### `doctor`
@@ -63,8 +65,10 @@ makes a files task (with a `files/` directory) instead of a project task. `impor
 
 ### `run`
 
-Refine the harness on the tasks. Running the same command again resumes the run and reuses
-every finished step.
+Refine the harness on the tasks, then combine what the tasks taught into one final harness
+per recursion mode (one more improver session each), stored in the run's `consolidated/`
+directory. Running the same command again resumes the run and reuses every finished step;
+if building the final harness failed, only that step runs again.
 
 | Option | Meaning |
 |---|---|
@@ -84,11 +88,19 @@ every finished step.
 | `--selector human` | Pick the final harness yourself when `k` > 1. |
 | `--steer TEXT\|@FILE` | Guidance added to every improver session. |
 | `--dry-run` | Show the tasks and the number of model calls; run nothing. |
+| `--detach` | Start the run in the background and return at once with its name, pid and log file (`run.log` in the run directory). |
 | `--split-file FILE` | Task partition file, for benchmark suites. |
 
 A run keeps the settings it started with. Resuming it with a different executor, model,
 improver or task list is refused, listing what changed; use a new `--name` for a new
-experiment. The limits apply to the whole run, across resumes.
+experiment. The limits apply to the whole run, across resumes. A run that is already going
+is not started twice.
+
+### `stop [NAME]`
+
+Stop a running run, whether it was started with `--detach` or in another terminal. It
+finishes the model calls in flight and exits; running the same `harness2 run` command again
+resumes it.
 
 ### `status [NAME]`
 
@@ -113,26 +125,40 @@ rubric or the judge model changes.
 
 Average the grades per recursion mode. Several names compare runs.
 
-### `runs ls` and `runs show NAME`
+### `runs ls | show NAME | rm NAME`
 
-List runs with their progress and spend, or show one run's settings, totals and tasks.
+List runs with their progress and spend, show one run's state and settings, or delete a run
+and everything it stored (`--yes` to skip the question).
 
 ### `diff [NAME]`
 
-Show how the harness a run adopted for a task differs from the harness the run started
-from.
+Show how the run's final harness differs from the harness the run started from.
 
 | Option | Meaning |
 |---|---|
-| `--task ID` | The task whose adopted harness to show. Default: the last task the run finished. |
+| `--task ID` | Show the harness adopted for this one task instead of the final harness. |
 | `--mode {parallel,sequential}` | The recursion mode to take it from (default parallel). |
 | `--stat` | List the changed files only. |
 
+### `eval [NAME]`
+
+Run the agent with the starting harness and with the final harness on the run's tasks that
+have a check or rubric, grade both, and compare the pass rates. Costs one agent run per
+task, harness and repeat.
+
+| Option | Meaning |
+|---|---|
+| `--repeat N` | Runs per task and harness (default 1). More runs, steadier numbers. |
+| `--split {all,train,test}` | Compare on one split, for example the `test` tasks the run did not use. |
+| `--only-tasks ID,...` | Compare on these tasks only. |
+| `--mode {parallel,sequential}` | Which mode's final harness to compare (default parallel). |
+
 ### `apply [NAME]`
 
-Write an adopted harness into the project. Only what the run changed relative to the
+Write the run's final harness into the project. Only what the run changed relative to the
 harness it started from is applied, so edits you made since are kept; a file changed both
 by the run and in the project is skipped unless `--force`. The changes are listed first.
+With `--json`, `--yes` or `--dry-run` is required, since nothing is asked.
 
 | Option | Meaning |
 |---|---|
@@ -169,6 +195,12 @@ rubric, or to explain a run's results.
 |---|---|
 | `--with {claude,codex}` | Which CLI to start. Default: the improver's channel, if installed. |
 
+### `guide`
+
+Print the guide for AI agents that drive harness2, followed by the current project's
+settings, tasks and runs. `--install claude` installs it as a user-level Claude Code skill
+(`~/.claude/skills/harness2/`), which harness2's own runs never load.
+
 ### `setup SUITE [ARGS...]`
 
 Run a plugin suite's installer, for example `harness2 setup lab` for the
@@ -183,7 +215,7 @@ Run the method on two toy tasks with scripted editors: no model calls, a few sec
 
 Serve a configured model as an OpenAI Responses API endpoint through LiteLLM, so the Codex
 executor or channel can use providers it cannot reach directly. Needs
-`pip install 'harness2[bridge]'`.
+`pip install 'harness2-cli[bridge]'`.
 
 | Option | Meaning |
 |---|---|
@@ -206,7 +238,7 @@ Print a shell completion script; see [below](#shell-completion).
 | 1 | An error: bad settings, a missing CLI or key, a failed check, a run that could not continue. |
 | 2 | Invalid command-line usage. |
 | 3 | `run` finished, but some tasks failed. |
-| 4 | `run` stopped at `--budget-usd` or `--max-calls`. Raise the limit and rerun to resume. |
+| 4 | `run` or `eval` stopped at `--budget-usd`, `--max-calls` or the provider's usage limit. Rerun to resume. |
 | 130 | Interrupted with Ctrl-C. Rerun to resume. |
 
 ## A run on disk
@@ -214,7 +246,10 @@ Print a shell completion script; see [below](#shell-completion).
 ```
 .harness2/runs/<name>/
   run.json            settings, task list and schedule the run started with
+  run.pid, run.log    while it runs: its process, and its output when started with --detach
   events.jsonl        one line per agent run, model session, selection and task, with costs
+  consolidated/<mode>/ the final harness, the improver's notes and what it was built from
+  eval/<mode>/        results of harness2 eval
   base_harness/       the project's harness when the run started
   rollouts/<id>/      one agent run: prompt.md, stream.jsonl (trajectory), final.md,
                       deliverable.patch or output/, meta.json, judge.json
