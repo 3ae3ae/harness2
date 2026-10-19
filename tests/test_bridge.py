@@ -111,11 +111,8 @@ class BridgeTests(unittest.TestCase):
                 self.assertEqual(env["HARNESS2_BRIDGE_KEY"], endpoint["key"])
                 self.assertIn("[providers.bridge]", stdout.getvalue())
                 self.assertIn('api_key_env = "HARNESS2_BRIDGE_KEY"', stdout.getvalue())
-                snippet = (
-                    stdout.getvalue()
-                    .split("Provider configuration:\n", 1)[1]
-                    .split("\nEnvironment:", 1)[0]
-                )
+                text = stdout.getvalue()
+                snippet = text[text.index("[providers.bridge]") : text.index("\n\nand put its key")]
                 self.assertEqual(tomllib.loads(snippet)["providers"]["bridge"]["type"], "openai")
                 self.assertNotIn("secret", (root / "bridge.yaml").read_text())
 

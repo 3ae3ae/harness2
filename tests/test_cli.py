@@ -184,9 +184,10 @@ class CliTests(unittest.TestCase):
             )
         self.assertEqual(self.invoke("--quiet", "runs", "show", "missing")[2], "")
         self.assertIn("command: config", self.invoke("--verbose", "config", "path")[2])
-        for command in ("init", "status", "chat", "apply"):
+        for command in ("status", "apply"):
             code, _, error = self.invoke(command, project=False)
-            self.assertEqual((code, error), (1, "not implemented yet\n"))
+            self.assertEqual(code, 1)
+            self.assertIn("not inside a harness2 project", error)
         with self.assertRaises(settings.ConfigError):
             C.run_path(self.context("runs", "ls"), "../escape")
         for command in ("--help", "--version"):
@@ -256,10 +257,9 @@ class CliTests(unittest.TestCase):
         self.assertEqual(list((self.project / ".harness2/runs").rglob("events.jsonl")), [])
         code, stdout, _ = self.invoke("run", "--dry-run", "--k", "2", "--max-tasks", "1")
         self.assertEqual(code, 0)
-        self.assertIn("namespace[parallel]", stdout)
-        self.assertIn("library root", stdout)
+        self.assertIn("would refine 1 task(s)", stdout)
         self.assertIn("accounting", stdout)
-        self.assertIn("call estimate", stdout)
+        self.assertIn("Model calls: 8 agent runs + 8", stdout)
         self.assertEqual(
             run._estimate(1, 2, ("agg",), {"spent_usd": 4, "calls": 2})["average_cost_per_call"], 2
         )
@@ -354,13 +354,13 @@ class CliTests(unittest.TestCase):
                 patch.object(run.schedule, "run_sweep", side_effect=exception),
                 patch.object(run, "Proposer", DemoProposer),
             ):
-                code, _, error = self.invoke("run")
+                code, out, error = self.invoke("run")
             self.assertEqual(code, expected)
             self.assertEqual(
                 json.loads((root / "events.jsonl").read_text().splitlines()[-1])["status"], status
             )
             if expected == 130:
-                self.assertIn("run the same command to resume", error)
+                self.assertIn("Run the same command to resume", out)
         for result, expected in (
             ({"domains": [{"failed": 1}]}, 3),
             ({"domains": [{"error": "dead"}]}, 1),
@@ -443,7 +443,7 @@ class CliTests(unittest.TestCase):
             )
             code, stdout, _ = self.invoke("--json", "task", "ls")
             self.assertEqual((code, json.loads(stdout)), (0, rows))
-            self.assertIn("x\td\ttrain", self.invoke("task", "ls")[1])
+            self.assertRegex(self.invoke("task", "ls")[1], r"x +d +train +files +yes")
             self.assertEqual(self.invoke("--json", "task", "import", "tasks.csv", "--force")[0], 0)
             fake.import_tasks.assert_called_once_with(
                 self.project / ".harness2/tasks", Path("tasks.csv"), force=True
@@ -470,14 +470,14 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(call.call_count, 1)
         rows = json.loads(stdout)
-        self.assertEqual(sum(row["check"].startswith("binary") for row in rows), 1)
+        self.assertEqual(sum(row["check"].endswith(" CLI") for row in rows), 1)
         self.assertTrue(any("fixture 1.0" in row["detail"] for row in rows))
         os.environ.pop("OPENAI_API_KEY")
         binary.unlink()
         code, stdout, _ = self.invoke("--json", "doctor")
         self.assertEqual(code, 1)
         self.assertTrue(
-            any(not row["ok"] and row["check"].startswith("binary") for row in json.loads(stdout))
+            any(not row["ok"] and row["check"].endswith(" CLI") for row in json.loads(stdout))
         )
         self.config_path.write_text('[improver]\nmodel="invalid"\n')
         self.assertEqual(self.invoke("doctor")[0], 1)

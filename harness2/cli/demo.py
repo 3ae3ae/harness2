@@ -24,10 +24,22 @@ from ..demo import DemoAdapter, DemoProposer
 
 
 def add_parser(subparsers):
-    parser = subparsers.add_parser("demo")
-    parser.add_argument("--output", type=Path, default=Path("runs/demo"))
-    parser.add_argument("--k", type=int, default=2)
-    parser.add_argument("--mode", choices=("parallel", "sequential", "both"), default="both")
+    parser = subparsers.add_parser(
+        "demo",
+        help="run the method locally, with scripted editors and no model calls",
+        description="Run the real recursion and library workflow on two toy tasks, with "
+        "deterministic editors instead of models. Takes a few seconds and costs nothing.",
+    )
+    parser.add_argument(
+        "--output", type=Path, default=Path("runs/demo"), help="where to write the demo run"
+    )
+    parser.add_argument("--k", type=int, default=2, help="recursion budget per task")
+    parser.add_argument(
+        "--mode",
+        choices=("parallel", "sequential", "both"),
+        default="both",
+        help="recursion mode",
+    )
     return parser
 
 

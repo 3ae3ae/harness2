@@ -91,9 +91,18 @@ def collect_selections(ns_dir: Path, modes: tuple[str, ...]) -> list[dict]:
 
 
 def add_parser(subparsers):
-    p = subparsers.add_parser("judge")
-    p.add_argument("name", nargs="?")
-    p.add_argument("--bases", action="store_true", help="Judge reference executions.")
+    p = subparsers.add_parser(
+        "judge",
+        help="grade the result each task adopted",
+        description="Grade each task's adopted result with the task's check command or "
+        "rubric.md; tasks with neither are skipped. NAME defaults to the most recent run.",
+    )
+    p.add_argument("name", nargs="?", help="run name (default: the most recent run)")
+    p.add_argument(
+        "--bases",
+        action="store_true",
+        help="grade the runs of the starting harness instead, for comparison",
+    )
     return p
 
 
@@ -178,6 +187,10 @@ def run(args, ctx) -> int:
         json.dumps({"judge_model": model, "rows": rows}, indent=2) + "\n", encoding="utf-8"
     )
     ctx.out(
-        rows, lambda data: f"{path}: {len(data)} rows, {sum(row['graded'] for row in data)} graded"
+        rows,
+        lambda data: (
+            f"Graded {sum(row['graded'] for row in data)} of {len(data)} result(s); "
+            f"saved to {path}. Summarise with `harness2 report`."
+        ),
     )
     return 0 if all(row["graded"] for row in rows) else 1

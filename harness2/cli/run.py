@@ -40,25 +40,45 @@ FLAGS = {
 
 
 def add_parser(subparsers):
-    p = subparsers.add_parser("run")
-    p.add_argument("--suite", help="Suite name.")
+    p = subparsers.add_parser(
+        "run",
+        help="refine the harness on the tasks",
+        description="Run the agent on every task, propose and probe harness edits, and adopt a "
+        "refined harness per task. Running the same command again resumes and reuses every "
+        "finished step. Model calls cost money: preview with --dry-run, cap with --budget-usd "
+        "or --max-calls.",
+    )
+    p.add_argument("--suite", help="task suite (default: tasks, your own)")
     p.add_argument("--bench", dest="suite", help=argparse.SUPPRESS)
-    p.add_argument("--executor", help="Executor name.")
-    p.add_argument("--name", help="Run name.")
-    p.add_argument("--k", type=int, help="Recursion scale.")
-    p.add_argument("--mode", "--modes", dest="modes", help="Comma-separated recursion modes.")
-    p.add_argument("--seed", type=int, help="Task ordering seed.")
-    p.add_argument("--split", choices=("all", "train", "test"), default="all", help="Task split.")
-    p.add_argument("--split-file", type=Path, help="Task split file.")
-    p.add_argument("--only-domains", default="", help="Comma-separated domains.")
-    p.add_argument("--only-tasks", default="", help="Comma-separated task IDs.")
-    p.add_argument("--max-tasks", type=int, help="Tasks per domain.")
-    p.add_argument("--workers", type=int, help="Concurrent domains.")
-    p.add_argument("--budget-usd", type=float, help="Spending limit in USD.")
-    p.add_argument("--max-calls", type=int, help="Model call limit.")
-    p.add_argument("--selector", choices=("human",), help="Interactive selector.")
-    p.add_argument("--steer", metavar="TEXT|@FILE", help="Improver guidance.")
-    p.add_argument("--dry-run", action="store_true", help="Preview tasks and call estimates.")
+    p.add_argument("--executor", help="agent that runs the tasks: claude, codex or command")
+    p.add_argument("--name", help="run name (default: <executor>-k<k>)")
+    p.add_argument("--k", type=int, help="recursion budget per task (default 1)")
+    p.add_argument(
+        "--mode",
+        "--modes",
+        dest="modes",
+        help="parallel (default), sequential, or both separated by a comma",
+    )
+    p.add_argument("--seed", type=int, help="shuffle the task order within each domain")
+    p.add_argument(
+        "--split", choices=("all", "train", "test"), default="all", help="run one split only"
+    )
+    p.add_argument("--split-file", type=Path, help="task partition file (benchmark suites)")
+    p.add_argument("--only-domains", default="", metavar="D,...", help="run only these domains")
+    p.add_argument("--only-tasks", default="", metavar="ID,...", help="run only these tasks")
+    p.add_argument("--max-tasks", type=int, metavar="N", help="run at most N tasks per domain")
+    p.add_argument("--workers", type=int, metavar="N", help="domains to run at the same time")
+    p.add_argument(
+        "--budget-usd", type=float, metavar="USD", help="stop once the run has spent this much"
+    )
+    p.add_argument("--max-calls", type=int, metavar="N", help="stop after N model calls")
+    p.add_argument(
+        "--selector", choices=("human",), help="pick the final harness yourself (when k > 1)"
+    )
+    p.add_argument("--steer", metavar="TEXT|@FILE", help="guidance added to every improver session")
+    p.add_argument(
+        "--dry-run", action="store_true", help="show the tasks and the model calls; run nothing"
+    )
     return p
 
 
@@ -87,36 +107,56 @@ def _estimate(tasks: int, k: int, modes: tuple[str, ...], totals: dict) -> dict:
     }
 
 
+def _spend(totals: dict) -> str:
+    return f" · ${totals['spent_usd']:.2f} spent · {totals['calls']} model calls"
+
+
+def _stopped(name: str, reason: str, totals: dict) -> str:
+    why = {
+        "interrupted": "interrupted",
+        "budget_usd": f"reached --budget-usd {totals['budget_usd']:g}",
+        "max_calls": f"reached --max-calls {totals['max_calls']}",
+    }.get(reason, reason)
+    advice = (
+        "Run the same command to resume."
+        if reason == "interrupted"
+        else "Raise the limit and run the same command to resume."
+    )
+    return f"Run {name} stopped: {why}{_spend(totals)}.\n{advice}"
+
+
 def _print_stream(data) -> str:
+    domains, stream, est = data["domains"], data["stream"], data["estimate"]
+    lanes = data["workers"]
     lines = [
-        f"# {data['suite']}-{data['substrate']} split={data['split']} "
-        f"seed={data['seed']} k={data['k']} modes={','.join(data['modes'])}"
+        f"Run {data['name']} would refine {len(stream)} task(s) in {len(domains)} domain(s) "
+        f"(k={data['k']}, {', '.join(data['modes'])}), "
+        + ("one domain at a time." if lanes == 1 else f"{lanes} domains at a time."),
+        "",
     ]
-    lines.extend(f"#   namespace[{mode}]: {ns}" for mode, ns in data["namespaces"].items())
+    width = max(6, *(len(d) for d in domains))
+    lines.append(f"  {'#':>4}  {'DOMAIN':<{width}}  TASK")
     lines.extend(
-        (
-            f"#   summaries under: {data['summaries']}",
-            f"#   library root: {data['library']}",
-            f"#   domains parallel: {data['workers']}",
+        f"  {i:>4}  {domain:<{width}}  {task}" for i, (domain, task) in enumerate(stream, 1)
+    )
+    lines += [
+        "",
+        f"Model calls: {est['rollouts']} agent runs + {est['sessions']} improver, selector and "
+        f"reflector sessions = {est['calls']} (retries can add more).",
+    ]
+    if est["average_cost_per_call"] is not None:
+        cost = est["average_cost_per_call"] * est["calls"]
+        lines.append(
+            f"At this run's average so far, ${est['average_cost_per_call']:.3f} per call, that "
+            f"is about ${cost:.2f} in total."
         )
-    )
-    lines.extend(
-        f"{i:>4}  {domain:<40} {task}" for i, (domain, task) in enumerate(data["stream"], 1)
-    )
-    lines.append("# domains of this split, with task counts (the legal --only-domains names):")
-    lines.extend(f"{len(tasks):>4}  {domain}" for domain, tasks in data["domains"].items())
-    cap = f", max {data['max_tasks']} per domain" if data["max_tasks"] is not None else ""
-    lines.append(
-        f"# {len(data['stream'])} tasks over {len(data['domains'])} domains "
-        f"(domains parallel, tasks within a domain sequential{cap})"
-    )
-    lines.append(f"# call estimate: {data['estimate']}")
+    lines.append(f"Stored in {data['run_dir']}")
     return "\n".join(lines)
 
 
 def run(args, ctx) -> int:
     events.start(None)
-    status, reason = "error", ""
+    status, reason, name = "error", "", args.name or ""
     try:
         project, config = ctx.project, ctx.settings
         k, seed = config.get("run.k"), config.get("run.seed")
@@ -166,6 +206,7 @@ def run(args, ctx) -> int:
                     "domains": domains,
                     "stream": stream,
                     "estimate": _estimate(len(stream), k, modes, C.event_totals(root)),
+                    "run_dir": root,
                 },
                 _print_stream,
             )
@@ -232,23 +273,26 @@ def run(args, ctx) -> int:
             if errors
             else (("failed", "failed tasks") if failed else ("ok", ""))
         )
+        done = sum(int(row.get("done", 0)) for row in result["domains"])
         ctx.out(
             {"result": result, "totals": events.totals()},
-            lambda data: f"{name}: {status}; {data['totals']}",
+            lambda data: (
+                f"Run {name}: {done} task(s) done, {failed} failed"
+                + _spend(data["totals"])
+                + (f"\nErrors: {reason}" if errors else "")
+                + f"\nNext: harness2 status {name} · harness2 judge {name} · harness2 diff {name}"
+            ),
         )
         return 1 if errors else 3 if failed else 0
     except events.Stopped as exc:
         reason = str(exc)
         status = "interrupted" if reason == "interrupted" else "stopped"
-        ctx.out(events.totals(), str)
-        if status == "interrupted":
-            ctx.log("run the same command to resume")
+        ctx.out(events.totals(), lambda totals: _stopped(name, reason, totals))
         return 130 if status == "interrupted" else 4
     except KeyboardInterrupt:
         status, reason = "interrupted", "interrupted"
         events.request_stop(reason)
-        ctx.out(events.totals(), str)
-        ctx.log("run the same command to resume")
+        ctx.out(events.totals(), lambda totals: _stopped(name, reason, totals))
         return 130
     except Exception as exc:
         reason = str(exc)

@@ -47,8 +47,13 @@ def _spend_and_fallbacks(ns_dir: Path, modes: tuple[str, ...], k: int) -> tuple[
 
 
 def add_parser(subparsers):
-    p = subparsers.add_parser("report")
-    p.add_argument("names", nargs="*")
+    p = subparsers.add_parser(
+        "report",
+        help="summarise a run's grades",
+        description="Average the grades `harness2 judge` wrote, per recursion mode. Name several "
+        "runs to compare them.",
+    )
+    p.add_argument("names", nargs="*", help="run names (default: the most recent run)")
     return p
 
 

@@ -1,8 +1,0 @@
-[console_scripts]
-harness2 = harness2.cli.main:main
-harness2-bridge = harness2.cli.main:main
-harness2-check = harness2.cli.main:main
-harness2-demo = harness2.cli.main:main
-harness2-judge = harness2.cli.main:main
-harness2-report = harness2.cli.main:main
-harness2-setup = harness2.cli.main:main
