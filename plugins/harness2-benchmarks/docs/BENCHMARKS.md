@@ -121,4 +121,7 @@ uses a fresh benchmark container. The adapter reads the verifier's `score.json`;
 the improver never receives verifier output. Missing verifier results remain
 unscored. Runs live under `.harness2/runs/<name>/`.
 
-For Codex, start the bridge with `harness2-bridge --host 0.0.0.0` so that the containers can reach it.
+For Codex, start the bridge with `--host 0.0.0.0` (for example
+`harness2 bridge --model vertex/gemini-3.5-flash --host 0.0.0.0`) so that the containers can
+reach it, and set `HARNESS2_CODEX_CONTAINER_URL` as described in
+[Setup](SETUP.md#codex-executor).

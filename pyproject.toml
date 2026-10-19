@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "harness2"
 version = "0.1.0"
-description = "Harness²: Recursive Agent Harnessing for an Open World"
+description = "Tune your coding agent's harness on your own tasks"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12,<3.14"
@@ -16,8 +16,13 @@ classifiers = [
 ]
 authors = [
     { name = "Google LLC" },
+    { name = "The Harness2 Authors" },
 ]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/3ae3ae/harness2"
+Paper = "https://arxiv.org/abs/2610.14224"
 
 [project.optional-dependencies]
 bridge = ["litellm[proxy]==1.95.0", "fastapi==0.139.2", "google-auth==2.56.3"]

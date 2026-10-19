@@ -19,7 +19,7 @@ directly from the package.
 The OpenCode launcher that used to sit beside it,
 `run_benchmark_opencode_harness_adapt.sh`, was a fork that shared almost nothing
 with upstream. It has been replaced by the first-party Python module
-[`harness2/benchmarks/jb_opencode_runner.py`](../../benchmarks/jb_opencode_runner.py),
+[`harness2_benchmarks/jb_opencode_runner.py`](../../jb_opencode_runner.py),
 which the adapter launches as a subprocess in its place. That module is release
 code, not a vendored asset, so it is not listed in `ASSETS.json`.
 
