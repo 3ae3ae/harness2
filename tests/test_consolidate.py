@@ -219,11 +219,11 @@ class ConsolidateTests(unittest.TestCase):
         self.assertEqual((self.project / "CLAUDE.md").read_text(), "Use shared procedure.\n")
         text, _ = self.invoke("eval", "trial", "--repeat", "2")
         self.assertIn(
-            "Comparing the consolidated harness with the starting one on 2 task(s), 2 run(s) each.",
+            "Comparing the final harness with the starting one on 2 task(s), 2 run(s) each.",
             text,
         )
-        self.assertIn("TASK  START  CONSOLIDATED\na-one  0%  100%\nb-two  0%  100%", text)
-        self.assertIn("mean  0%  100%  (+100 points)", text)
+        self.assertRegex(text, r"TASK +START +FINAL\n +a-one +0% +100%\n +b-two +0% +100%")
+        self.assertRegex(text, r"mean +0% +100%  \(\+100 points\)")
         self.assertIn(f"Saved to {self.run_dir / 'eval/parallel/results.json'}", text)
         results = json.loads((self.run_dir / "eval/parallel/results.json").read_text())
         self.assertEqual(results["mean"], {"start": 0.0, "consolidated": 1.0})
