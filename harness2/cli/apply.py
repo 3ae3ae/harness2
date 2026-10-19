@@ -35,10 +35,10 @@ from . import _adopt as A
 def add_parser(sub) -> argparse.ArgumentParser:
     p = sub.add_parser(
         "apply",
-        help="write an adopted harness into the project",
-        description="Show what the harness a run adopted changes, then write those changes "
-        "into the project. NAME defaults to the most recent run; the task defaults to the "
-        "last one the run finished.",
+        help="write the final harness into the project",
+        description="Show what a run's final harness changes, then write those changes into "
+        "the project. NAME defaults to the most recent run; --task takes one task's adopted "
+        "harness instead.",
     )
     p.add_argument("name", nargs="?", help="run name (default: the most recent run)")
     p.add_argument("--task", help="take the harness adopted for this task")

@@ -29,8 +29,8 @@ from .run import _csv, _stopped
 def add_parser(subparsers):
     p = subparsers.add_parser(
         "eval",
-        help="compare the consolidated harness with the starting one",
-        description="Run the agent with the starting harness and with the consolidated one on "
+        help="compare the final harness with the starting one",
+        description="Run the agent with the starting harness and with the final one on "
         "the run's tasks, grade both with each task's check or rubric, and compare. Costs one "
         "agent run per task, harness and repeat.",
     )

@@ -23,10 +23,9 @@ from . import _adopt
 def add_parser(subparsers):
     p = subparsers.add_parser(
         "diff",
-        help="show what an adopted harness changes",
-        description="Compare the harness a run adopted for a task with the harness the run "
-        "started from. NAME defaults to the most recent run, the task to the last one the run "
-        "finished.",
+        help="show what the final harness changes",
+        description="Compare a run's final harness with the harness the run started from. "
+        "NAME defaults to the most recent run; --task shows one task's adopted harness instead.",
     )
     p.add_argument("name", nargs="?", help="run name (default: the most recent run)")
     p.add_argument("--task", help="show the harness adopted for this task")
