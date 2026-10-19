@@ -21,13 +21,22 @@ from . import _adopt
 
 
 def add_parser(subparsers):
-    p = subparsers.add_parser("diff")
-    p.add_argument("name", nargs="?")
-    p.add_argument("--task", help="Task ID.")
-    p.add_argument(
-        "--mode", choices=("parallel", "sequential"), default="parallel", help="Recursion mode."
+    p = subparsers.add_parser(
+        "diff",
+        help="show what an adopted harness changes",
+        description="Compare the harness a run adopted for a task with the harness the run "
+        "started from. NAME defaults to the most recent run, the task to the last one the run "
+        "finished.",
     )
-    p.add_argument("--stat", action="store_true", help="Print change counts.")
+    p.add_argument("name", nargs="?", help="run name (default: the most recent run)")
+    p.add_argument("--task", help="show the harness adopted for this task")
+    p.add_argument(
+        "--mode",
+        choices=("parallel", "sequential"),
+        default="parallel",
+        help="take the harness adopted in this recursion mode",
+    )
+    p.add_argument("--stat", action="store_true", help="list the changed files only")
     return p
 
 

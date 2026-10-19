@@ -21,8 +21,14 @@ import shlex
 
 
 def add_parser(subparsers):
-    p = subparsers.add_parser("completion")
-    p.add_argument("shell", choices=("bash", "zsh"))
+    p = subparsers.add_parser(
+        "completion",
+        help="print a shell completion script",
+        description="Print a completion script. zsh: harness2 completion zsh > "
+        '"${fpath[1]}/_harness2"   bash: harness2 completion bash > '
+        "~/.local/share/bash-completion/completions/harness2",
+    )
+    p.add_argument("shell", choices=("bash", "zsh"), help="your shell")
     return p
 
 

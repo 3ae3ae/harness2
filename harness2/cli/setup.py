@@ -23,9 +23,14 @@ from ..settings import ConfigError
 
 
 def add_parser(subparsers):
-    p = subparsers.add_parser("setup")
-    p.add_argument("suite")
-    p.add_argument("args", nargs=argparse.REMAINDER)
+    p = subparsers.add_parser(
+        "setup",
+        help="install what a plugin suite needs",
+        description="Run a plugin suite's installer, for example `harness2 setup lab`. "
+        "Arguments after the suite name are passed to the installer.",
+    )
+    p.add_argument("suite", help="suite name")
+    p.add_argument("args", nargs=argparse.REMAINDER, help="arguments for the installer")
     return p
 
 

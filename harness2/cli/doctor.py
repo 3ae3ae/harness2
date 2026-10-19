@@ -26,8 +26,13 @@ from . import _common as C
 
 
 def add_parser(subparsers):
-    p = subparsers.add_parser("doctor")
-    p.add_argument("--live", action="store_true", help="Call each model; costs money.")
+    p = subparsers.add_parser(
+        "doctor",
+        help="check that a run has what it needs",
+        description="Check the agent CLIs, provider keys, settings and tasks without calling a "
+        "model. --live also sends one tiny request per configured model.",
+    )
+    p.add_argument("--live", action="store_true", help="also call each model once (costs a little)")
     return p
 
 
@@ -52,11 +57,12 @@ def run(args, ctx) -> int:
         if problems:
             raise RuntimeError("; ".join(problems))
 
-    check("suite", suite_check)
-    roles = [config.role(name) for name in ("improver", "selector", "reflector", "judge")]
+    check(f"suite {config.get('suite.name')}", suite_check)
+    names = ("executor", "improver", "selector", "reflector", "judge")
+    roles = [config.role(name) for name in names[1:]]
     roles.insert(0, {**config.section("executor"), "channel": config.get("executor.name")})
     binaries, models, referenced = set(), {}, set()
-    for role in roles:
+    for role_name, role in zip(names, roles):
         channel = role["channel"]
         if channel == "human":
             continue
@@ -66,9 +72,16 @@ def run(args, ctx) -> int:
         if model:
 
             def resolve(model=model, channel=channel, role=role):
-                provider_name, _ = providers.split_model(model)
+                provider_name, bare = providers.split_model(model)
                 provider = config.provider(provider_name)
                 referenced.add(provider_name)
+                # each raises ConfigError when this CLI cannot use this kind of provider
+                if channel == "claude":
+                    providers.claude_env(provider)
+                elif channel == "codex":
+                    providers.codex_config(provider, bare, role["effort"])
+                elif channel == "opencode":
+                    providers.opencode_config(provider, bare)
                 if channel != "command":
                     models.setdefault(
                         (channel, model),
@@ -83,9 +96,17 @@ def run(args, ctx) -> int:
                         ),
                     )
 
-            check(f"model {channel}/{model}", resolve)
+                return f"{channel} · {model}"
+
+            check(role_name, resolve)
         elif channel != "command":
-            rows.append({"check": f"model {channel}", "ok": False, "detail": "model is empty"})
+            rows.append(
+                {
+                    "check": role_name,
+                    "ok": False,
+                    "detail": f"set {role_name}.model (provider/model)",
+                }
+            )
     for binary, channel in sorted(binaries):
 
         def binary_check(binary=binary, channel=channel):
@@ -95,11 +116,17 @@ def run(args, ctx) -> int:
             )
             return (result.stdout or result.stderr).strip()
 
-        check(f"binary {binary or channel}", binary_check)
+        check(f"{binary or channel} CLI", binary_check)
     for name in sorted(referenced):
-        problems = providers.check(config.provider(name))
+        provider = config.provider(name)
+        problems = providers.check(provider)
+        detail = f"key in {provider.api_key_env}" if provider.api_key_env else "ok"
         rows.append(
-            {"check": f"provider {name}", "ok": not problems, "detail": "; ".join(problems) or "ok"}
+            {
+                "check": f"provider {name}",
+                "ok": not problems,
+                "detail": "; ".join(problems) or detail,
+            }
         )
     if args.live:
         for (channel, model), spec in sorted(models.items()):
@@ -111,11 +138,18 @@ def run(args, ctx) -> int:
                     raise RuntimeError(reply.error or "expected reply ok")
                 return reply.text
 
-            check(f"live {channel}/{model}", live_check)
-    ctx.out(
-        rows,
-        lambda data: "\n".join(
-            f"{'ok' if row['ok'] else 'FAIL'} {row['check']}: {row['detail']}" for row in data
-        ),
-    )
+            check(f"live {channel} · {model}", live_check)
+    ctx.out(rows, _render)
     return int(any(not row["ok"] for row in rows))
+
+
+def _render(rows: list[dict]) -> str:
+    width = max(len(row["check"]) for row in rows)
+    lines = [
+        f"{'ok' if row['ok'] else 'FAIL':<4}  {row['check']:<{width}}  {row['detail']}"
+        for row in rows
+    ]
+    failed = sum(not row["ok"] for row in rows)
+    lines.append("")
+    lines.append("All checks passed." if not failed else f"{failed} problem(s) to fix.")
+    return "\n".join(lines)

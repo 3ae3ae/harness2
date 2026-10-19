@@ -51,14 +51,26 @@ def _endpoint(path: Path, host: str, port: int) -> dict:
 
 
 def _arguments(p):
-    p.add_argument("--model", required=True)
-    p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--port", type=int, default=0)
+    p.add_argument("--model", required=True, help="provider/model to serve")
+    p.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="interface to listen on; use 0.0.0.0 when containers must reach it",
+    )
+    p.add_argument("--port", type=int, default=0, help="port (default: the saved one, or free)")
     return p
 
 
 def add_parser(subparsers):
-    return _arguments(subparsers.add_parser("bridge"))
+    return _arguments(
+        subparsers.add_parser(
+            "bridge",
+            help="serve a model as a Responses API endpoint for Codex",
+            description="Serve any configured provider/model as an OpenAI Responses API "
+            "endpoint through LiteLLM, so Codex can run on it. Needs the bridge extra: "
+            "pip install 'harness2[bridge]'.",
+        )
+    )
 
 
 def run(args, ctx):
@@ -97,10 +109,12 @@ def run(args, ctx):
     ctx.out(
         {"provider": snippet, "environment": {"HARNESS2_BRIDGE_KEY": endpoint["key"]}},
         lambda data: (
-            "Provider configuration:\n"
+            f"Serving {args.model} on port {port}. Add this provider to .harness2/config.toml "
+            f"and use the model as bridge/{model}:\n\n"
             + data["provider"]
-            + "\n\nEnvironment:\nHARNESS2_BRIDGE_KEY="
+            + "\n\nand put its key in .harness2/.env:\n\nHARNESS2_BRIDGE_KEY="
             + data["environment"]["HARNESS2_BRIDGE_KEY"]
+            + "\n"
         ),
     )
     sys.stdout.flush()

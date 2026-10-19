@@ -20,19 +20,24 @@ from .. import settings
 
 
 def add_parser(subparsers):
-    p = subparsers.add_parser("config")
+    p = subparsers.add_parser("config", help="read and change settings")
     commands = p.add_subparsers(dest="action", required=True)
-    show = commands.add_parser("show")
-    show.add_argument("--origin", action="store_true", help="Include setting origins.")
-    get = commands.add_parser("get")
-    get.add_argument("key")
-    set_parser = commands.add_parser("set")
-    set_parser.add_argument("key")
-    set_parser.add_argument("value")
-    set_parser.add_argument(
-        "--global", dest="global_", action="store_true", help="Edit global settings."
+    show = commands.add_parser("show", help="print the resolved settings")
+    show.add_argument(
+        "--origin", action="store_true", help="also print where each value comes from"
     )
-    commands.add_parser("path")
+    get = commands.add_parser("get", help="print one setting")
+    get.add_argument("key", help="dotted key, e.g. executor.model")
+    set_parser = commands.add_parser("set", help="change a setting in the project config file")
+    set_parser.add_argument("key", help="dotted key, e.g. run.workers")
+    set_parser.add_argument("value", help="new value, read as a TOML literal when it parses")
+    set_parser.add_argument(
+        "--global",
+        dest="global_",
+        action="store_true",
+        help="change ~/.config/harness2/config.toml instead",
+    )
+    commands.add_parser("path", help="print where the config files are")
     return p
 
 
@@ -44,10 +49,7 @@ def run(args, ctx) -> int:
             values = {
                 key: {"value": value, "origin": config.origin(key)} for key, value in values.items()
             }
-        ctx.out(
-            values,
-            lambda data: "\n".join(f"{key} = {value!r}" for key, value in sorted(data.items())),
-        )
+        ctx.out(values, _show)
     elif args.action == "get":
         value = config.get(args.key)
         ctx.out(value, str)
@@ -60,7 +62,10 @@ def run(args, ctx) -> int:
             overrides={**ctx.overrides, args.key: (value, "config set")},
         )
         settings.set_value(path, args.key, value)
-        ctx.out({"path": path, "key": args.key, "value": value}, lambda data: str(data["path"]))
+        ctx.out(
+            {"path": path, "key": args.key, "value": value},
+            lambda data: f"Set {data['key']} = {settings._literal(data['value'])} in {path}",
+        )
     else:
         ctx.out(
             {
@@ -72,3 +77,15 @@ def run(args, ctx) -> int:
             lambda data: "\n".join(f"{key}: {value}" for key, value in data.items()),
         )
     return 0
+
+
+def _show(values: dict) -> str:
+    """`key = value` lines in TOML syntax; with --origin, where each value comes from."""
+    lines = []
+    for key, entry in sorted(values.items()):
+        value, origin = (
+            (entry["value"], entry["origin"]) if isinstance(entry, dict) else (entry, "")
+        )
+        literal = "(unset)" if value is None else settings._literal(value)
+        lines.append(f"{key} = {literal}" + (f"    # {origin}" if origin else ""))
+    return "\n".join(lines)

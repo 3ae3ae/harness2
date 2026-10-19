@@ -22,11 +22,11 @@ from . import _common as C
 
 
 def add_parser(subparsers):
-    p = subparsers.add_parser("runs")
+    p = subparsers.add_parser("runs", help="list runs or show one")
     commands = p.add_subparsers(dest="action", required=True)
-    commands.add_parser("ls")
-    show = commands.add_parser("show")
-    show.add_argument("name")
+    commands.add_parser("ls", help="list runs with their progress and spend")
+    show = commands.add_parser("show", help="show a run's settings, totals and tasks")
+    show.add_argument("name", help="run name")
     return p
 
 
