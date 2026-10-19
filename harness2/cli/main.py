@@ -33,6 +33,8 @@ COMMANDS = (
     "report",
     "runs",
     "diff",
+    "consolidate",
+    "eval",
     "apply",
     "config",
     "chat",
