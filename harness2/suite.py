@@ -523,13 +523,20 @@ class GenericAdapter:
         runmark.mark_complete(run_dir, run_id=run_id, harness_dir=harness_dir)
         return run_dir
 
+    def _meta(self, run_dir: Path) -> dict:
+        """The rollout's meta.json, or {} for a rollout that died before writing one."""
+        try:
+            return json.loads((run_dir / "meta.json").read_text())
+        except (OSError, ValueError):
+            return {}
+
     def rollout_cost(self, run_dir: Path) -> float:
-        return float(json.loads((run_dir / "meta.json").read_text())["cost_usd"])
+        return float(self._meta(run_dir).get("cost_usd", 0.0))
 
     def delivered(self, run_dir: Path) -> bool:
-        if not (run_dir / "meta.json").is_file():
+        kind = self._meta(run_dir).get("deliverable")
+        if kind is None:
             return False
-        kind = json.loads((run_dir / "meta.json").read_text())["deliverable"]
         if kind == "files":
             return any(path.is_file() for path in (run_dir / "output").rglob("*"))
         path = run_dir / ("deliverable.patch" if kind == "diff" else "final.md")
@@ -541,7 +548,9 @@ class GenericAdapter:
         )
 
     def deliverable_files(self, run_dir: Path) -> dict[str, str]:
-        kind = json.loads((run_dir / "meta.json").read_text())["deliverable"]
+        kind = self._meta(run_dir).get("deliverable")
+        if kind is None:
+            return {}
         if kind == "files":
             paths = {
                 p.relative_to(run_dir / "output").as_posix(): p
@@ -565,8 +574,9 @@ class GenericAdapter:
     def deliverable_text(self, run_dir: Path) -> str:
         files = self.deliverable_files(run_dir)
         text = "\n\n".join(files.values())
-        if "deliverable.patch" in files:
-            text += "\n\n" + (run_dir / "final.md").read_text(encoding="utf-8")
+        final = run_dir / "final.md"
+        if "deliverable.patch" in files and final.is_file():
+            text += "\n\n" + final.read_text(encoding="utf-8")
         return text
 
     def validate_tree(self, tree: dict[str, str]) -> None:

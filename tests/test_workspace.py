@@ -19,6 +19,7 @@ from __future__ import annotations
 import subprocess
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from harness2 import workspace
@@ -36,6 +37,18 @@ class WorkspaceTests(unittest.TestCase):
         (self.project / "code.txt").write_text("before\n")
         (self.project / "CLAUDE.md").write_text("instructions\n")
         workspace.commit_all(self.project, "initial")
+
+    def test_concurrent_project_workspaces(self):
+        def open_one(_):
+            with workspace.project_workspace(self.project, "HEAD") as ws:
+                return (ws / "code.txt").read_text()
+
+        with ThreadPoolExecutor(8) as pool:
+            self.assertEqual(list(pool.map(open_one, range(16))), ["before\n"] * 16)
+        listed = subprocess.run(
+            ["git", "-C", str(self.project), "worktree", "list"], capture_output=True, text=True
+        )
+        self.assertEqual(len(listed.stdout.splitlines()), 1)
 
     def test_project_diff_apply_and_cleanup(self):
         with workspace.project_workspace(self.project, "HEAD") as ws:

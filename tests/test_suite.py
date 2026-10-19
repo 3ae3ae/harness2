@@ -199,6 +199,13 @@ class SuiteTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             self.adapter.tasks("missing")
 
+    def test_a_rollout_that_died_before_writing_anything_reads_as_empty(self):
+        dead = self.root / "missing"
+        self.assertFalse(self.adapter.delivered(dead))
+        self.assertEqual(self.adapter.deliverable_files(dead), {})
+        self.assertEqual(self.adapter.deliverable_text(dead), "")
+        self.assertEqual(self.adapter.rollout_cost(dead), 0.0)
+
     def test_claude_execute_capture_idempotence_and_isolation(self):
         self.assertFalse(self.adapter.delivered(self.root / "missing"))
         run_dir = self.adapter.execute("one", None, "nested/run")
